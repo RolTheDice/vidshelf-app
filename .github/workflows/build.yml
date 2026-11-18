@@ -1,0 +1,57 @@
+name: build
+
+# main에 올릴 때마다 테스트하고 Windows 설치 파일(.exe)을 만든다.
+# 공개 저장소에서는 만든 설치 파일을 Releases(다운로드 페이지)에도 올린다.
+# 수동 실행: GitHub 저장소 → Actions → build → Run workflow
+permissions:
+  contents: write
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: xvfb-run -a npm run test:e2e -- --no-sandbox
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VidShelf-windows
+          path: release/*.exe
+      - name: 릴리스 이름 정하기
+        id: ver
+        shell: bash
+        run: echo "tag=v$(node -p "require('./package.json').version")-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+      - name: 공개 저장소면 Releases에 설치 파일 올리기
+        if: ${{ !github.event.repository.private }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: VidShelf ${{ steps.ver.outputs.tag }}
+          files: release/*.exe
+          make_latest: true
+          body: |
+            Windows 설치 파일입니다. 아래 Assets에서 `VidShelf-Setup-….exe`를 받아 실행하세요.
+            처음 실행할 때 Windows가 "PC 보호" 창을 띄우면 [추가 정보] → [실행]을 누르세요 (서명하지 않은 개인 프로젝트라서 나오는 경고예요).
+            새 버전을 설치해도 정리한 정보(%APPDATA%\VidShelf)는 그대로 남아요.

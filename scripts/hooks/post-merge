@@ -1,0 +1,6 @@
+#!/bin/sh
+# VidShelf: GitHub Desktop에서 [Pull origin]을 누르면 자동으로 빌드하고 다시 켠다.
+# (scripts/hooks/post-merge 원본을 실행 도우미가 .git/hooks로 복사해 둔 것)
+command -v node >/dev/null 2>&1 || exit 0
+node scripts/launch.cjs --from-hook >/dev/null 2>&1
+exit 0

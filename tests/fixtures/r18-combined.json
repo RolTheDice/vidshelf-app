@@ -1,0 +1,31 @@
+{
+  "_note": "r18.dev combined 응답과 구조만 같은 가짜 시험 데이터 (내용은 지어낸 값)",
+  "actors": [],
+  "actresses": [
+    {"id": 9000001, "image_url": "yamada_hanako.jpg", "name_kana": "やまだはなこ", "name_kanji": "山田花子", "name_romaji": "Hanako Yamada"},
+    {"id": 9000002, "image_url": "suzuki_yuuka.jpg", "name_kana": "すずきゆうか", "name_kanji": "鈴木優香", "name_romaji": "Yuka Suzuki"}
+  ],
+  "authors": [],
+  "categories": [
+    {"id": 1, "name_en": "Featured Actress", "name_ja": "単体作品"},
+    {"id": 2, "name_en": "Hi-Def", "name_ja": "ハイビジョン"},
+    {"id": 3, "name_en": "Big Tits", "name_ja": "巨乳"},
+    {"id": 4, "name_en": "Test Sale 30% Off", "name_ja": "テストセール30％オフ"},
+    {"id": 5, "name_en": "Something New", "name_ja": "表にない新ジャンル"}
+  ],
+  "content_id": "1abcd00370",
+  "directors": [{"id": 1, "name_kana": "さとうたろう", "name_kanji": "佐藤太郎", "name_romaji": "Taro Sato"}],
+  "dvd_id": null,
+  "gallery": [],
+  "jacket_full_url": "https://pics.dmm.co.jp/mono/movie/adult/1abcd370/1abcd370ps.jpg",
+  "label_name_en": "Test Label",
+  "label_name_ja": "テストレーベル",
+  "maker_name_en": "Test Maker",
+  "maker_name_ja": "テストメーカー",
+  "release_date": "2024-01-02",
+  "runtime_mins": 150,
+  "series_name_en": "Test Series",
+  "series_name_ja": "テストシリーズ",
+  "title_en": "A Made-up Test Title",
+  "title_ja": "テスト用の作品名"
+}
