@@ -28,7 +28,10 @@ button, input, textarea, select { font: inherit; color: inherit; }
 ::-webkit-scrollbar-thumb { background: #2a3140; border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-.app { display: flex; flex-direction: column; height: 100%; }
+.app { display: flex; flex-direction: column; height: 100%; user-select: none; -webkit-user-select: none; }
+/* 프로그램처럼: Shift·Ctrl로 여러 개 고를 때 글자·표지가 파랗게 선택되지 않게. 글을 쓰거나 복사할 곳만 선택 허용 */
+.app input, .app textarea, .app [contenteditable], .app .v-title, .app .v-title-ja, .app .info .v, .app .story, .app .logbox, .app .desc code { user-select: text; -webkit-user-select: text; }
+.app img { -webkit-user-drag: none; }
 
 /* ---------- header ---------- */
 .header { display: flex; align-items: center; gap: 18px; height: 54px; padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--panel); flex-shrink: 0; }
@@ -266,3 +269,4 @@ textarea.memo:focus { border-color: var(--accent); }
 .drop-box .d { color: var(--muted); margin-top: 6px; }
 
 .v-title-ja { margin-top: -4px; margin-bottom: 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.p-seek-osd { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 99px; font-size: 12px; color: #fff; pointer-events: none; z-index: 3; }

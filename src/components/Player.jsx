@@ -27,6 +27,8 @@ export default function Player({
   const [speed, setSpeed] = useState(1);
   const [full, setFull] = useState(false);
   const [showUi, setShowUi] = useState(true);
+  const [seekOsd, setSeekOsd] = useState(null); // 방향키로 이동했을 때 잠깐 보이는 작은 표시 (아래 조작 막대는 띄우지 않음)
+  const osdTimer = useRef(null);
   const [error, setError] = useState('');
   const [resumeAt, setResumeAt] = useState(0);
 
@@ -93,15 +95,26 @@ export default function Player({
     const k = e.key;
     const handled = {
       ' ': toggle, k: toggle,
-      ArrowRight: () => seek(vid.current.currentTime + (e.shiftKey ? 60 : 10)),
-      ArrowLeft: () => seek(vid.current.currentTime - (e.shiftKey ? 60 : 10)),
+      ArrowRight: () => seekBy(e.shiftKey ? 60 : 10),
+      ArrowLeft: () => seekBy(e.shiftKey ? -60 : -10),
       ArrowUp: () => { setMuted(false); setVolume((x) => Math.min(1, +(x + 0.05).toFixed(2))); },
       ArrowDown: () => setVolume((x) => Math.max(0, +(x - 0.05).toFixed(2))),
       f: fullscreen, F: fullscreen, m: () => setMuted((x) => !x),
       n: () => hasNext && onNext(), p: () => hasPrev && onPrev(),
       t: () => onWide && onWide(), T: () => onWide && onWide(),
     }[k];
-    if (handled) { e.preventDefault(); e.stopPropagation(); handled(); poke(); }
+    if (!handled) return;
+    e.preventDefault(); e.stopPropagation(); handled();
+    if (k !== 'ArrowLeft' && k !== 'ArrowRight') poke(); // 앞뒤 이동은 조작 막대를 띄우지 않는다
+  };
+  const seekBy = (d) => {
+    const v = vid.current;
+    if (!v) return;
+    const to = Math.max(0, Math.min(v.duration || 0, v.currentTime + d));
+    seek(to);
+    setSeekOsd(`${d > 0 ? '▶▶' : '◀◀'} ${Math.abs(d) >= 60 ? `${Math.abs(d) / 60}분` : `${Math.abs(d)}초`} · ${fmtTime(to)}`);
+    clearTimeout(osdTimer.current);
+    osdTimer.current = setTimeout(() => setSeekOsd(null), 900);
   };
 
   const pct = dur ? (time / dur) * 100 : 0;
@@ -114,6 +127,8 @@ export default function Player({
         onPlay={() => { setPlaying(true); poke(); }} onPause={() => { setPlaying(false); setShowUi(true); window.vs.savePosition(video.id, vid.current.currentTime, vid.current.duration); }}
         onEnded={() => { window.vs.savePosition(video.id, 0, vid.current.duration); onEnded(); }}
         onError={() => setError('이 파일은 내장 플레이어로 재생할 수 없어요.')} />
+
+      {seekOsd && <div className="p-seek-osd">{seekOsd}</div>}
 
       {error && (
         <div className="p-error">

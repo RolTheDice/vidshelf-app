@@ -64,6 +64,7 @@ export default function FileList({
             <div key={v.id}
               className={`row ${sel ? 'sel' : ''} ${v.id === primaryId ? 'primary' : ''} ${v.missing ? 'missing' : ''} ${drag && drag.over === i ? 'drop' : ''}`}
               style={{ position: 'absolute', top: i * ROW, left: 0, right: 0 }}
+              onMouseDown={(e) => { if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault(); }}
               onClick={(e) => onSelect(v.id, e)} onDoubleClick={() => onPlay(v.id)}
               draggable={!!reorderable}
               onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; setDrag({ from: i, over: i }); }}
