@@ -21,7 +21,9 @@ contextBridge.exposeInMainWorld('vs', {
   updateVideo: (id, patch) => ipcRenderer.invoke('video:update', id, patch),
   play: (id) => ipcRenderer.invoke('video:play', id), // 외부(기본) 플레이어
   markPlayed: (id) => ipcRenderer.invoke('video:played', id),
-  savePosition: (id, pos, dur) => ipcRenderer.invoke('video:position', id, pos, dur),
+  keyframes: (id) => ipcRenderer.invoke('video:keyframes', id),
+  watchPending: (id) => ipcRenderer.invoke('video:watchPending', id),
+  savePosition: (id, pos, dur, watched) => ipcRenderer.invoke('video:position', id, pos, dur, watched),
   deleteVideos: (ids, opts) => ipcRenderer.invoke('video:delete', ids, opts),
   savePlaylists: (pls) => ipcRenderer.invoke('playlists:save', pls),
   reveal: (id) => ipcRenderer.invoke('video:reveal', id),

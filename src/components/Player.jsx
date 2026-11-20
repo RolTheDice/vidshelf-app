@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from './Icon.jsx';
 import { fmtTime, mediaUrl } from '../lib.js';
+const SNAP_RANGE = 2; // ←/→ 기준 화면 맞춤 허용 범위(초): 10초 → 8~12초
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const load = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
@@ -16,6 +17,8 @@ export default function Player({
   const watched = useRef(0);
   const lastT = useRef(0);
   const counted = useRef(false);
+  // 아직 횟수로 세지 않은 시청 시간(초). 이번에 이미 1회 셌으면 0
+  const pending = () => (counted.current ? 0 : Math.round(watched.current));
   const lastSave = useRef(0);
   const hideTimer = useRef(null);
 
@@ -29,12 +32,18 @@ export default function Player({
   const [showUi, setShowUi] = useState(true);
   const [seekOsd, setSeekOsd] = useState(null); // 방향키로 이동했을 때 잠깐 보이는 작은 표시 (아래 조작 막대는 띄우지 않음)
   const osdTimer = useRef(null);
+  const seekTarget = useRef(null); // ←/→로 가려는 위치 (건너뛰는 중에 더 누르면 여기만 바뀜)
+  const keyframes = useRef(null); // 기준 화면 시각 목록 (MP4). 여기에 맞춰 건너뛰면 거의 바로 나온다
   const [error, setError] = useState('');
   const [resumeAt, setResumeAt] = useState(0);
 
   // 영상이 바뀌면 상태 초기화
   useEffect(() => {
+    // 재생 횟수: 이번에 본 시간만이 아니라, 전에 보다 만 시간까지 합쳐서 1분이 되면 1회
     watched.current = 0; lastT.current = 0; counted.current = false;
+    window.vs.watchPending(video.id).then((p) => { watched.current += Number(p) || 0; }).catch(() => {});
+    keyframes.current = null; seekTarget.current = null;
+    window.vs.keyframes(video.id).then((k) => { keyframes.current = Array.isArray(k) && k.length > 1 ? k : null; }).catch(() => {});
     setError(''); setResumeAt(0); setTime(0);
     wrap.current?.focus();
   }, [video.id]);
@@ -53,7 +62,7 @@ export default function Player({
     const id = video.id;
     return () => {
       const v = vid.current;
-      if (v && v.currentTime > 0) window.vs.savePosition(id, v.ended ? 0 : v.currentTime, v.duration);
+      if (v && v.currentTime > 0) window.vs.savePosition(id, v.ended ? 0 : v.currentTime, v.duration, pending());
     };
   }, [video.id]);
 
@@ -64,7 +73,7 @@ export default function Player({
   };
 
   const toggle = () => { const v = vid.current; if (!v) return; if (v.paused) v.play().catch(() => {}); else v.pause(); };
-  const seek = (t) => { const v = vid.current; if (v) v.currentTime = Math.max(0, Math.min(t, v.duration || t)); };
+  const seek = (t) => { const v = vid.current; seekTarget.current = null; if (v) v.currentTime = Math.max(0, Math.min(t, v.duration || t)); };
   const fullscreen = () => { if (document.fullscreenElement) document.exitFullscreen(); else wrap.current?.requestFullscreen().catch(() => {}); };
 
   const onMeta = () => {
@@ -88,7 +97,7 @@ export default function Player({
       counted.current = true;
       window.vs.markPlayed(video.id).then((nv) => nv && onCounted(nv));
     }
-    if (Date.now() - lastSave.current > 5000) { lastSave.current = Date.now(); window.vs.savePosition(video.id, t, v.duration); }
+    if (Date.now() - lastSave.current > 5000) { lastSave.current = Date.now(); window.vs.savePosition(video.id, t, v.duration, pending()); }
   };
 
   const onKey = (e) => {
@@ -107,14 +116,48 @@ export default function Player({
     e.preventDefault(); e.stopPropagation(); handled();
     if (k !== 'ArrowLeft' && k !== 'ArrowRight') poke(); // 앞뒤 이동은 조작 막대를 띄우지 않는다
   };
+  // ←/→ 건너뛰기: 이전 건너뛰기가 아직 끝나지 않았으면 목표만 바꿔 두고, 끝나면 마지막 목표로 한 번에 간다.
+  // (키를 꾹 누르거나 빠르게 여러 번 눌러도 건너뛰기가 쌓여서 화면이 멈춰 있지 않게)
+  const seekStart = useRef(0);
+  const seekInfo = useRef('');
+  const showOsd = (text, ms = 900) => {
+    setSeekOsd(text);
+    clearTimeout(osdTimer.current);
+    osdTimer.current = setTimeout(() => setSeekOsd(null), ms);
+  };
   const seekBy = (d) => {
     const v = vid.current;
     if (!v) return;
-    const to = Math.max(0, Math.min(v.duration || 0, v.currentTime + d));
-    seek(to);
-    setSeekOsd(`${d > 0 ? '▶▶' : '◀◀'} ${Math.abs(d) >= 60 ? `${Math.abs(d) / 60}분` : `${Math.abs(d)}초`} · ${fmtTime(to)}`);
-    clearTimeout(osdTimer.current);
-    osdTimer.current = setTimeout(() => setSeekOsd(null), 900);
+    const base = seekTarget.current != null ? seekTarget.current : v.currentTime;
+    let to = Math.max(0, Math.min(v.duration || 0, base + d));
+    // 가까운 기준 화면으로 맞추기: 기준 화면은 바로 보여 줄 수 있어서 빠르다.
+    // 앞으로 갈 땐 지금보다 뒤, 뒤로 갈 땐 지금보다 앞의 것 중 목표에서 가장 가까운 것.
+    // 이동 거리가 들쭉날쭉하지 않게 목표에서 2초 이내일 때만 맞춘다 (10초 → 8~12초)
+    const kf = keyframes.current;
+    let snapped = false;
+    if (kf) {
+      let lo = 0, hi = kf.length - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (kf[mid] < to) lo = mid + 1; else hi = mid; }
+      const cands = [kf[lo - 2], kf[lo - 1], kf[lo], kf[lo + 1]]
+        .filter((x) => x != null && (d > 0 ? x > base + 0.5 : x < base - 0.5) && Math.abs(x - to) <= SNAP_RANGE);
+      const best = cands.sort((a, b) => Math.abs(a - to) - Math.abs(b - to))[0];
+      if (best != null) { to = best + 0.01; snapped = true; } // 반올림 오차로 앞 화면을 잡지 않게 살짝 뒤
+    }
+    seekTarget.current = to;
+    setTime(to);
+    if (!v.seeking) { v.currentTime = to; seekStart.current = performance.now(); }
+    seekInfo.current = `${d > 0 ? '▶▶' : '◀◀'} ${fmtTime(to)}`;
+    showOsd(seekInfo.current + (snapped || !/\.(mp4|m4v|mov)$/i.test(video.path) ? '' : ' · 정확한 위치로 (느릴 수 있음)'));
+  };
+  const onSeeked = () => {
+    const v = vid.current;
+    const t = seekTarget.current;
+    if (v && t != null && Math.abs(v.currentTime - t) > 0.05) { v.currentTime = t; return; } // 그사이 더 누른 곳으로
+    seekTarget.current = null;
+    // 화면이 나오기까지 오래 걸렸으면 얼마나 걸렸는지 잠깐 보여 준다 (느린 파일 확인용)
+    const ms = seekStart.current ? performance.now() - seekStart.current : 0;
+    seekStart.current = 0;
+    if (ms > 250 && seekInfo.current) showOsd(`${seekInfo.current} · ${(ms / 1000).toFixed(1)}초 걸림`, 1500);
   };
 
   const pct = dur ? (time / dur) * 100 : 0;
@@ -123,9 +166,9 @@ export default function Player({
     <div ref={wrap} className={`player ${full ? 'full' : ''} ${showUi || !playing ? '' : 'hide-ui'}`} tabIndex={0}
       onKeyDown={onKey} onMouseMove={poke} onMouseLeave={() => playing && setShowUi(false)}>
       <video ref={vid} src={mediaUrl(video.path)} onClick={toggle} onDoubleClick={fullscreen}
-        onLoadedMetadata={onMeta} onTimeUpdate={onTime}
-        onPlay={() => { setPlaying(true); poke(); }} onPause={() => { setPlaying(false); setShowUi(true); window.vs.savePosition(video.id, vid.current.currentTime, vid.current.duration); }}
-        onEnded={() => { window.vs.savePosition(video.id, 0, vid.current.duration); onEnded(); }}
+        onLoadedMetadata={onMeta} onTimeUpdate={onTime} onSeeked={onSeeked}
+        onPlay={() => { setPlaying(true); poke(); }} onPause={() => { setPlaying(false); setShowUi(true); window.vs.savePosition(video.id, vid.current.currentTime, vid.current.duration, pending()); }}
+        onEnded={() => { window.vs.savePosition(video.id, 0, vid.current.duration, pending()); onEnded(); }}
         onError={() => setError('이 파일은 내장 플레이어로 재생할 수 없어요.')} />
 
       {seekOsd && <div className="p-seek-osd">{seekOsd}</div>}

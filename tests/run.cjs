@@ -10,6 +10,7 @@ const { parseCombined, contentIdGuesses, R18Client } = require('../electron/r18.
 const { nameToHangul, kanaToHangul, nameSimilarity } = require('../electron/kana.cjs');
 const { mapGenres } = require('../electron/genres-ko.cjs');
 const { translateJaKo, translateDeepl, deeplUsage } = require('../electron/translate.cjs');
+const { readKeyframes } = require('../electron/keyframes.cjs');
 const { findMovieLinks, extractPoomkiDetail } = require('../electron/poomki-extract.cjs');
 const { imageSize, isValidCover, findCover, coverPathFor, findExistingCover } = require('../electron/cover.cjs');
 const { Store } = require('../electron/db.cjs');
@@ -186,6 +187,12 @@ test('DeepL 번역: 무료 키(:fx)는 api-free 주소, 일본어→한국어, �
   assert.strictEqual((await translateDeepl('テスト', 'bad:fx', req)).status, 403);
   assert.deepStrictEqual(await deeplUsage('abc:fx', req), { ok: true, used: 1200, limit: 500000 });
   assert.strictEqual((await deeplUsage('bad:fx', req)).ok, false);
+});
+
+test('MP4 기준 화면 시각 읽기 (B프레임·편집 목록 보정), MP4가 아니면 null', async () => {
+  const k = await readKeyframes(path.join(__dirname, 'fixtures', 'keyframes.mp4'));
+  assert.deepStrictEqual(k, [0, 1.32, 2.6, 3.92]); // ffprobe로 확인한 값 (25fps, 1.3초마다 강제 기준 화면)
+  assert.strictEqual(await readKeyframes(path.join(__dirname, 'fixtures', 'poomki-detail.html')), null);
 });
 
 // ---------------------------------------------------------------- 표지 주소 (스스로 배우는 방식)

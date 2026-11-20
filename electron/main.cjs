@@ -5,6 +5,7 @@ const { pathToFileURL } = require('url');
 const { Store } = require('./db.cjs');
 const { scanFolder, reconcileMoves } = require('./scanner.cjs');
 const { handleMediaRequest } = require('./media.cjs');
+const { readKeyframes } = require('./keyframes.cjs');
 const { extractCode } = require('./code.cjs');
 const { R18Client } = require('./r18.cjs');
 const { PoomkiClient } = require('./poomki.cjs');
@@ -679,20 +680,32 @@ function registerIpc() {
   });
 
   // 내장 플레이어: 일정 시간 이상 봤을 때 1회
+  // 내장 플레이어: ←/→ 건너뛰기를 기준 화면 위치에 맞추기 위한 시각 목록 (MP4만)
+  ipcMain.handle('video:keyframes', async (_e, id) => {
+    const v = store.videos[id];
+    return v ? readKeyframes(v.path) : null;
+  });
+
+  // 아직 재생 횟수로 세지 않은 시청 시간 (전에 보다 만 시간, 초)
+  ipcMain.handle('video:watchPending', (_e, id) => (store.videos[id] && store.videos[id].watchPending) || 0);
+
   ipcMain.handle('video:played', (_e, id) => {
     const v = store.videos[id];
     if (!v) return null;
     v.playCount = (v.playCount || 0) + 1;
     v.lastPlayed = Date.now();
+    v.watchPending = 0; // 합쳐 둔 시청 시간은 1회로 셌으니 비움
     store.save();
     return v;
   });
 
   // 이어 보기 위치 저장
-  ipcMain.handle('video:position', (_e, id, position, duration) => {
+  ipcMain.handle('video:position', (_e, id, position, duration, watched) => {
     const v = store.videos[id];
     if (!v) return null;
     v.lastPosition = Math.max(0, Math.floor(position || 0));
+    // 아직 재생 횟수로 세지 않은 시청 시간 (다음에 열면 여기서부터 이어서 더한다)
+    if (watched != null && isFinite(watched)) v.watchPending = Math.max(0, Math.round(watched));
     if (duration && isFinite(duration)) v.duration = Math.round(duration);
     store.save();
     return null;
