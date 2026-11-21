@@ -4,10 +4,17 @@ import { fmtTime, mediaUrl } from '../lib.js';
 const SNAP_RANGE = 2; // ←/→ 기준 화면 맞춤 허용 범위(초): 10초 → 8~12초
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+// 소리 크기 자동 맞춤: 영상마다 소리가 크고 작은 걸 비슷하게. 들어오는 소리 크기를 재서 천천히 키우거나 줄이고,
+// 갑자기 큰 소리는 압축기로 눌러 준다. 영상마다 잰 크기는 기억해서 다음에 열면 처음부터 맞춘다.
+const TARGET_DB = -20; // 맞출 평균 소리 크기 (dBFS)
+const MAX_BOOST_DB = 15;
+const MAX_CUT_DB = -12;
 const load = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 const keep = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 저장 안 돼도 재생엔 문제없음 */ } };
 
 // 표지 창 자리에서 재생하는 가벼운 플레이어
+const gainFor = (loud) => Math.pow(10, Math.max(MAX_CUT_DB, Math.min(MAX_BOOST_DB, TARGET_DB - loud)) / 20);
+
 export default function Player({
   video, hasPrev, hasNext, onPrev, onNext, onEnded, onClose, onCounted, queueLabel,
   shuffle, repeat, onShuffle, onRepeat, wide, onWide,
@@ -34,6 +41,8 @@ export default function Player({
   const osdTimer = useRef(null);
   const seekTarget = useRef(null); // ←/→로 가려는 위치 (건너뛰는 중에 더 누르면 여기만 바뀜)
   const keyframes = useRef(null); // 기준 화면 시각 목록 (MP4). 여기에 맞춰 건너뛰면 거의 바로 나온다
+  const [autoLevel, setAutoLevel] = useState(load('vs.autoLevel', true));
+  const audio = useRef(null); // Web Audio 연결 (처음 재생할 때 만들고 계속 씀)
   const [error, setError] = useState('');
   const [resumeAt, setResumeAt] = useState(0);
 
@@ -48,7 +57,84 @@ export default function Player({
     wrap.current?.focus();
   }, [video.id]);
 
-  useEffect(() => { if (vid.current) { vid.current.volume = volume; vid.current.muted = muted; } keep('vs.volume', volume); }, [volume, muted]);
+  // 소리 크기: 자동 맞춤 연결이 있으면 영상 자체 소리는 그대로(1) 두고 맨 끝에서 줄인다 (자동 맞춤이 내 볼륨까지 되돌리지 않게)
+  const applyVolume = () => {
+    const v = vid.current;
+    if (!v) return;
+    const a = audio.current;
+    if (a) { v.volume = 1; v.muted = false; a.out.gain.value = muted ? 0 : volume; }
+    else { v.volume = volume; v.muted = muted; }
+  };
+  useEffect(() => { applyVolume(); keep('vs.volume', volume); }, [volume, muted]);
+
+  const ensureAudio = () => {
+    if (audio.current || !vid.current) return audio.current;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctx();
+      const src = ctx.createMediaElementSource(vid.current);
+      const an = ctx.createAnalyser();
+      an.fftSize = 2048;
+      const agc = ctx.createGain();
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -18; comp.knee.value = 12; comp.ratio.value = 8; comp.attack.value = 0.005; comp.release.value = 0.25;
+      const out = ctx.createGain();
+      src.connect(an);
+      src.connect(agc);
+      out.connect(ctx.destination);
+      audio.current = { ctx, an, agc, comp, out, buf: new Float32Array(an.fftSize), loud: null, lastKeep: 0 };
+      route();
+      applyVolume();
+    } catch (_) { audio.current = null; }
+    return audio.current;
+  };
+  // 자동 맞춤 켜짐: 소리 → 크기 조절 → 압축기 → 볼륨, 꺼짐: 소리 → 볼륨
+  const route = () => {
+    const a = audio.current;
+    if (!a) return;
+    try { a.agc.disconnect(); a.comp.disconnect(); } catch (_) { /* 처음엔 연결 없음 */ }
+    if (autoLevelRef.current) { a.agc.connect(a.comp); a.comp.connect(a.out); }
+    else { a.agc.gain.cancelScheduledValues(0); a.agc.gain.value = 1; a.agc.connect(a.out); }
+  };
+  const autoLevelRef = useRef(autoLevel);
+  useEffect(() => { autoLevelRef.current = autoLevel; keep('vs.autoLevel', autoLevel); route(); }, [autoLevel]);
+
+  // 영상이 바뀌면 전에 재 둔 소리 크기로 시작
+  useEffect(() => {
+    const a = audio.current;
+    const saved = load('vs.loudness', {})[video.id];
+    if (a) {
+      a.loud = typeof saved === 'number' ? saved : null;
+      if (autoLevelRef.current && a.loud != null) a.agc.gain.value = gainFor(a.loud);
+      else a.agc.gain.value = 1;
+    }
+  }, [video.id]);
+
+  // 재생 중에 소리 크기를 재서 천천히 맞추기
+  useEffect(() => {
+    if (!playing) return undefined;
+    const tick = setInterval(() => {
+      const a = audio.current;
+      if (!a || !autoLevelRef.current) return;
+      a.an.getFloatTimeDomainData(a.buf);
+      let sum = 0;
+      for (let i = 0; i < a.buf.length; i++) sum += a.buf[i] * a.buf[i];
+      const db = 10 * Math.log10(sum / a.buf.length + 1e-12);
+      if (db < -60) return; // 조용한 구간은 재지 않음 (거기에 맞춰 키우면 다음 소리가 너무 큼)
+      a.loud = a.loud == null ? db : a.loud + (db - a.loud) * 0.04; // 몇 초에 걸쳐 천천히
+      a.agc.gain.setTargetAtTime(gainFor(a.loud), a.ctx.currentTime, 0.8);
+      if (wrap.current) wrap.current.dataset.level = `${a.loud.toFixed(1)}dB→${(TARGET_DB - a.loud).toFixed(1)}`;
+      if (Date.now() - a.lastKeep > 5000) {
+        a.lastKeep = Date.now();
+        const all = load('vs.loudness', {});
+        all[video.id] = Math.round(a.loud * 10) / 10;
+        const ids = Object.keys(all);
+        if (ids.length > 3000) delete all[ids[0]];
+        keep('vs.loudness', all);
+      }
+    }, 200);
+    return () => clearInterval(tick);
+  }, [playing, video.id]);
   useEffect(() => { if (vid.current) vid.current.playbackRate = speed; }, [speed, video.id]);
 
   useEffect(() => {
@@ -109,6 +195,7 @@ export default function Player({
       ArrowUp: () => { setMuted(false); setVolume((x) => Math.min(1, +(x + 0.05).toFixed(2))); },
       ArrowDown: () => setVolume((x) => Math.max(0, +(x - 0.05).toFixed(2))),
       f: fullscreen, F: fullscreen, m: () => setMuted((x) => !x),
+      l: () => setAutoLevel((x) => !x), L: () => setAutoLevel((x) => !x),
       n: () => hasNext && onNext(), p: () => hasPrev && onPrev(),
       t: () => onWide && onWide(), T: () => onWide && onWide(),
     }[k];
@@ -165,9 +252,9 @@ export default function Player({
   return (
     <div ref={wrap} className={`player ${full ? 'full' : ''} ${showUi || !playing ? '' : 'hide-ui'}`} tabIndex={0}
       onKeyDown={onKey} onMouseMove={poke} onMouseLeave={() => playing && setShowUi(false)}>
-      <video ref={vid} src={mediaUrl(video.path)} onClick={toggle} onDoubleClick={fullscreen}
+      <video ref={vid} src={mediaUrl(video.path)} crossOrigin="anonymous" onClick={toggle} onDoubleClick={fullscreen}
         onLoadedMetadata={onMeta} onTimeUpdate={onTime} onSeeked={onSeeked}
-        onPlay={() => { setPlaying(true); poke(); }} onPause={() => { setPlaying(false); setShowUi(true); window.vs.savePosition(video.id, vid.current.currentTime, vid.current.duration, pending()); }}
+        onPlay={() => { const a = ensureAudio(); if (a && a.ctx.state !== 'running') a.ctx.resume().catch(() => {}); setPlaying(true); poke(); }} onPause={() => { setPlaying(false); setShowUi(true); window.vs.savePosition(video.id, vid.current.currentTime, vid.current.duration, pending()); }}
         onEnded={() => { window.vs.savePosition(video.id, 0, vid.current.duration, pending()); onEnded(); }}
         onError={() => setError('이 파일은 내장 플레이어로 재생할 수 없어요.')} />
 
@@ -205,6 +292,8 @@ export default function Player({
           <button className="p-btn" onClick={() => setMuted((x) => !x)} title="음소거 (M)"><Icon name={muted || volume === 0 ? 'mute' : 'volume'} size={18} /></button>
           <input className="p-vol" type="range" min="0" max="1" step="0.05" value={muted ? 0 : volume}
             onChange={(e) => { setMuted(false); setVolume(Number(e.target.value)); }} />
+          <button className={`p-btn p-text ${autoLevel ? 'on' : ''}`} onClick={() => setAutoLevel((x) => !x)}
+            title={autoLevel ? '소리 크기 자동 맞춤 켜짐: 영상마다 다른 소리 크기를 비슷하게 맞춰요 (L)' : '소리 크기 자동 맞춤 꺼짐 (L)'}>음량 맞춤</button>
           <select className="p-speed" value={speed} onChange={(e) => setSpeed(Number(e.target.value))} title="재생 속도">
             {SPEEDS.map((s) => <option key={s} value={s}>{s}x</option>)}
           </select>

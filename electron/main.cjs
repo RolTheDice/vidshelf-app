@@ -17,7 +17,7 @@ const { rememberRule, describeRule, parseCode, learnRule } = require('./coverfin
 // 로컬 이미지(표지·배우 사진)용 vsimg://img/?p=<경로>, 내장 플레이어용 vsmedia://video/?p=<경로>
 protocol.registerSchemesAsPrivileged([
   { scheme: 'vsimg', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
-  { scheme: 'vsmedia', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  { scheme: 'vsmedia', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
 
 let win = null;

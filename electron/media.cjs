@@ -21,7 +21,8 @@ async function handleMediaRequest(req, isAllowed) {
   const size = st.size;
   const type = TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
   const range = req.headers.get('range');
-  const base = { 'Content-Type': type, 'Accept-Ranges': 'bytes' };
+  // Access-Control-Allow-Origin: 소리 크기 자동 맞춤(Web Audio)이 영상 소리를 읽으려면 필요
+  const base = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*' };
 
   if (range) {
     const m = /bytes=(\d*)-(\d*)/.exec(range);
