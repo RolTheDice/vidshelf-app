@@ -777,6 +777,24 @@ function registerIpc() {
     return err || null;
   });
 
+  // 여러 영상을 기본 앱(곰플레이어·팟플레이어·VLC 등)에서 재생목록으로 열기: .m3u8 재생목록 파일을 만들어 연다
+  ipcMain.handle('videos:playExternal', async (_e, ids, name) => {
+    const list = (ids || []).map((id) => store.videos[id]).filter((v) => v && !v.missing && fs.existsSync(v.path));
+    if (!list.length) return { ok: false, message: '열 수 있는 영상이 없어요' };
+    const dir = path.join(dataDir(), 'playlists');
+    fs.mkdirSync(dir, { recursive: true });
+    const safe = String(name || '재생목록').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60) || '재생목록';
+    const file = path.join(dir, `${safe}.m3u8`);
+    const lines = ['#EXTM3U'];
+    for (const v of list) {
+      lines.push(`#EXTINF:${v.duration ? Math.round(v.duration) : -1},${[v.code, v.title].filter(Boolean).join(' ') || v.fileName}`);
+      lines.push(v.path);
+    }
+    fs.writeFileSync(file, lines.join('\r\n') + '\r\n', 'utf8');
+    const err = await shell.openPath(file);
+    return err ? { ok: false, message: `기본 앱으로 열지 못했어요: ${err}` } : { ok: true, count: list.length, file };
+  });
+
   ipcMain.handle('video:reveal', (_e, id) => {
     const v = store.videos[id];
     if (v) shell.showItemInFolder(v.path);

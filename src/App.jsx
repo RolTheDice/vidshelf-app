@@ -327,11 +327,13 @@ export default function App() {
       <button className="btn sm danger" onClick={() => setDelIds(selIds())}><Icon name="trash" size={13} />삭제</button>
     </>
   );
+  const playExternal = (ids, name) => window.vs.playExternal(ids, name).then((r) => flash(r.ok ? `기본 앱에서 ${r.count}개를 재생목록으로 열었어요` : r.message));
   const bulkBar = (multi || activePlaylist || primaryVideo) && (
     <div className="bulk">
       {multi ? (<>
         <b>{selectedIds.size}개 선택</b>
         <button className="btn sm" onClick={() => { const ids = selectedList(); startPlay(ids[0], ids, `선택 ${ids.length}개`); }}><Icon name="play" size={13} fill />재생</button>
+        <button className="btn sm" onClick={() => playExternal(selectedList(), `선택 ${selectedIds.size}개`)} title="곰플레이어·팟플레이어 등 기본 앱에서 재생목록으로 열기"><Icon name="external" size={13} />기본 앱으로</button>
         {selectionActions}
         {activePlaylist && <button className="btn sm" onClick={() => removeFromPlaylist(activePlaylist.id, selectedList())}>재생목록에서 빼기</button>}
         <button className="btn sm ghost" onClick={() => setSelectedIds(new Set([primaryId]))}>선택 해제</button>
@@ -339,6 +341,7 @@ export default function App() {
         <b>{activePlaylist.name}</b>
         <button className="btn sm primary" disabled={!shown.length} onClick={() => { setShuffle(false); startPlay(shown[0].id, shown.map((v) => v.id), activePlaylist.name); }}><Icon name="play" size={13} fill />전체 재생</button>
         <button className="btn sm" disabled={!shown.length} onClick={() => { setShuffle(true); const ids = shown.map((v) => v.id); startPlay(ids[Math.floor(Math.random() * ids.length)], ids, activePlaylist.name); }}><Icon name="shuffle" size={13} />셔플 재생</button>
+        <button className="btn sm" disabled={!shown.length} onClick={() => playExternal(shown.map((v) => v.id), activePlaylist.name)} title="곰플레이어·팟플레이어 등 기본 앱에서 이 재생목록 그대로 열기"><Icon name="external" size={13} />기본 앱으로</button>
         {primaryVideo && shown.some((v) => v.id === primaryId) && (
           <button className="btn sm" onClick={() => removeFromPlaylist(activePlaylist.id, [primaryId])}>선택한 영상 빼기</button>
         )}

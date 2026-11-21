@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('vs', {
   testDeepl: (key) => ipcRenderer.invoke('deepl:test', key),
   updateVideo: (id, patch) => ipcRenderer.invoke('video:update', id, patch),
   play: (id) => ipcRenderer.invoke('video:play', id), // 외부(기본) 플레이어
+  playExternal: (ids, name) => ipcRenderer.invoke('videos:playExternal', ids, name), // 여러 개를 기본 앱 재생목록으로
   markPlayed: (id) => ipcRenderer.invoke('video:played', id),
   keyframes: (id) => ipcRenderer.invoke('video:keyframes', id),
   watchPending: (id) => ipcRenderer.invoke('video:watchPending', id),
