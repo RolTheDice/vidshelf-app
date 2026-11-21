@@ -32,6 +32,14 @@ function contentIdGuesses(code, rules = {}, max = 6) {
   return [...five, ...out.filter((c) => !five.includes(c))].slice(0, max);
 }
 
+/** content_id(예: 1start00669, h_1234abc00012)가 품번과 같은 작품인지 */
+function contentMatches(cid, code) {
+  const c = String(cid || '').toLowerCase().match(/([a-z]+?)0*(\d+)[a-z]?$/);
+  const k = String(code || '').toLowerCase().match(/^([a-z0-9]*?[a-z])-?0*(\d+)$/);
+  if (!c || !k) return true; // 모양을 모르면 막지 않음
+  return c[1].endsWith(k[1].replace(/^\d+/, '')) && Number(c[2]) === Number(k[2]);
+}
+
 const clean = (t) => String(t == null ? '' : t).replace(/\s+/g, ' ').trim();
 
 /** 표지: mono 작품은 작은 ps.jpg가 올 때가 있어 큰 pl.jpg를 먼저 */
@@ -100,20 +108,21 @@ class R18Client {
    * @returns {Promise<{found:boolean, data?:object, reason?:string, blocked?:boolean}>}
    */
   async lookup(code, { rules = {} } = {}) {
-    const dvd = String(code || '').toLowerCase();
+    // 하이픈을 넣으면 r18.dev가 비슷한 다른 작품을 줄 때가 있어(waaa-700 → waaa00007) 붙여서 묻는다
+    const dvd = String(code || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const first = await this.getJson(`${BASE}/videos/vod/movies/detail/-/dvd_id=${encodeURIComponent(dvd)}/json`);
     if (first.status === 403 || first.status === 429) return { found: false, blocked: true, reason: `r18.dev가 접속을 막았어요 (HTTP ${first.status})` };
     let full = null;
-    if (first.status === 200 && first.json && first.json.content_id) {
+    if (first.status === 200 && first.json && first.json.content_id && contentMatches(first.json.content_id, code)) {
       full = await this._combined(first.json.content_id);
     }
     if (!full) {
       // dvd_id로 안 잡히는 작품: content_id 형태를 직접 넣어 본다
       for (const cid of contentIdGuesses(code, rules)) {
-        await new Promise((r) => setTimeout(r, this.guessGapMs));
+        if (this.guessGapMs) await new Promise((r) => setTimeout(r, this.guessGapMs));
         const j = await this._combined(cid);
         // 다른 품번이 우연히 같은 content_id를 쓰는 경우는 버린다 (dvd_id가 있으면 비교)
-        if (j && (!j.dvd_id || sameCode(j.dvd_id, code))) { full = j; break; }
+        if (j && (j.dvd_id ? sameCode(j.dvd_id, code) : contentMatches(j.content_id, code))) { full = j; break; }
       }
     }
     if (!full) return { found: false, reason: first.status === 404 ? 'r18.dev에 없는 품번' : `r18.dev 응답 ${first.status}` };
@@ -124,4 +133,4 @@ class R18Client {
   }
 }
 
-module.exports = { R18Client, parseCombined, contentIdGuesses, ACTRESS_IMG };
+module.exports = { R18Client, parseCombined, contentIdGuesses, contentMatches, ACTRESS_IMG };

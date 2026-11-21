@@ -31,9 +31,9 @@ app.whenReady().then(async () => {
   session.defaultSession.protocol.handle('https', (req) => {
     const u = new URL(req.url);
     if (u.hostname === 'r18.dev') {
-      if (u.pathname.endsWith('/dvd_id=test-101/json')) return json({ content_id: 'test00101' });
+      if (u.pathname.endsWith('/dvd_id=test101/json')) return json({ content_id: 'test00101' });
       if (u.pathname.endsWith('/combined=test00101/json')) return json({ ...r18Data, content_id: 'test00101', dvd_id: 'TEST-101' });
-      if (u.pathname.endsWith('/dvd_id=block-001/json')) return new Response('slow down', { status: 429 });
+      if (u.pathname.endsWith('/dvd_id=block001/json')) return new Response('slow down', { status: 429 });
       return new Response('<h1>Not Found</h1>', { status: 404 });
     }
     if (req.url === 'https://pics.dmm.co.jp/digital/video/test00101/test00101pl.jpg') {

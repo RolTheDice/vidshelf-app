@@ -5,7 +5,7 @@ const path = require('path');
 
 const DEFAULT_SETTINGS = {
   coverMode: 'appdata', // appdata: 프로그램 폴더(기본) / beside: 영상 옆 품번.jpg / subfolder: covers 폴더
-  requestDelayMs: 1500, // 사이트 요청 간격 (품번기는 최소 2.5초)
+  requestDelayMs: 1500, // 품번기 요청 간격 (최소 1.5초)
   useR18: true, // r18.dev: 주 정보원 (배우·레이블·제작사·시리즈·감독·장르·발매일·표지 주소)
   usePoomki: true, // 품번기(poomki.net): 한국어 배우 이름 확인, r18.dev에 없는 작품
   translateTitles: true, // 일본어 원제를 한국어로 번역

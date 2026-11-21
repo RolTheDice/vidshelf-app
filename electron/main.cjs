@@ -33,7 +33,22 @@ async function fetchJson(url) {
     return { status: res.status, json };
   } finally { clearTimeout(t); }
 }
-const r18 = new R18Client(fetchJson);
+// 사이트별 요청 차례 지키기: 여러 영상을 동시에 처리해도 한 사이트에는 하나씩, 정해진 간격을 두고 묻는다
+class SiteGate {
+  constructor() { this.tails = new Map(); }
+  run(key, gapMs, fn) {
+    const prev = this.tails.get(key) || Promise.resolve();
+    const p = prev.then(async () => {
+      try { return await fn(); } finally { await sleep(typeof gapMs === 'function' ? gapMs() : gapMs); }
+    });
+    this.tails.set(key, p.catch(() => {}));
+    return p;
+  }
+}
+const gate = new SiteGate();
+const ORGANIZE_WORKERS = 3; // 동시에 정리하는 영상 수 (사이트마다 요청은 위 차례대로)
+
+const r18 = new R18Client((url) => gate.run('r18', 250, () => fetchJson(url)), { guessGapMs: 0 });
 
 // POST 등 요청 (DeepL)
 async function requestJson(url, init = {}) {
@@ -48,7 +63,9 @@ async function requestJson(url, init = {}) {
 }
 const poomki = new PoomkiClient();
 // 품번기는 사이트에 부담을 주지 않게 요청 사이를 넉넉히 쉰다
-const poomkiGap = () => Math.max(store.settings.requestDelayMs || 0, 2500) + Math.round(Math.random() * 1000);
+const poomkiGap = () => Math.max(store.settings.requestDelayMs || 0, 1500) + Math.round(Math.random() * 500);
+// 품번기는 보이지 않는 창 하나로 열기 때문에 한 번에 하나만 (검색 → 상세 사이도 쉬고, 끝나고도 쉼)
+const poomkiLookup = (code) => gate.run('poomki', poomkiGap, () => poomki.lookup(code, { gapMs: poomkiGap() }));
 const job = { running: false, cancelled: false };
 
 const dataDir = () => app.getPath('userData');
@@ -210,7 +227,7 @@ async function resolveActorNames(code, info, ctx, log, prevNames = []) {
   }
   if (pending.length && store.settings.usePoomki && !ctx.skipPoomki) {
     try {
-      const r = await poomki.lookup(code, { gapMs: poomkiGap() });
+      const r = await poomkiLookup(code);
       if (r.found) {
         const ko = r.data.actors;
         for (const a of pending) {
@@ -227,7 +244,6 @@ async function resolveActorNames(code, info, ctx, log, prevNames = []) {
         log('품번기가 접속을 막아서 이번 정리에서는 품번기 확인을 멈춰요 (배우 이름은 읽는 법으로 적어요).');
       }
     } catch (_) { /* 읽는 법으로 만든 이름 사용 */ }
-    await sleep(poomkiGap());
   }
   for (const a of info.actors) if (a.ja) maps.actors[a.ja] = a.name;
 }
@@ -364,7 +380,7 @@ function reuseFrom(v, donor, log) {
 async function translateText(text, names, ctx, log) {
   const key = String(store.settings.deeplKey || '').trim();
   if (key && !ctx.deeplOff) {
-    const r = await translateDeepl(text, key, requestJson, { names }).catch(() => ({ text: null, status: 0 }));
+    const r = await gate.run('deepl', 150, () => translateDeepl(text, key, requestJson, { names })).catch(() => ({ text: null, status: 0 }));
     if (r.text) return { text: r.text, by: 'deepl' };
     if (r.status === 403 || r.status === 456) {
       ctx.deeplOff = true;
@@ -372,7 +388,7 @@ async function translateText(text, names, ctx, log) {
         : 'DeepL 이번 달 무료 글자 수를 다 써서 구글 번역으로 바꿔요.');
     }
   }
-  const t = await translateJaKo(text, fetchJson, { names });
+  const t = await gate.run('google', 500, () => translateJaKo(text, fetchJson, { names })); // 구글이 너무 잦은 요청을 막지 않게
   return { text: t, by: 'google' };
 }
 
@@ -387,7 +403,6 @@ async function translateVideo(v, log, ctx) {
     if (v.titleJa && !v.titleKo) {
       const r = await translateText(v.titleJa, names, ctx, log);
       if (r.text) { v.titleKo = r.text; v.title = r.text; v.titleBy = r.by; ctx.translateFails = 0; } else fail();
-      await sleep(r.by === 'deepl' ? 200 : 800); // 구글이 너무 잦은 요청을 막지 않게
     }
     const maps = nameMaps();
     if (v.seriesJa && v.series && !/[가-힣]/.test(v.series) && !ctx.skipTranslate) {
@@ -395,7 +410,6 @@ async function translateVideo(v, log, ctx) {
       if (!maps.series[key]) {
         const r = await translateText(v.seriesJa, names, ctx, log);
         if (r.text) maps.series[key] = r.text; else fail();
-        await sleep(r.by === 'deepl' ? 200 : 800);
       }
       if (maps.series[key]) v.series = maps.series[key];
     }
@@ -428,14 +442,13 @@ async function processVideo(v, log, ctx) {
       log(`r18.dev 오류: ${v.code} — ${e.message}`);
       v.lastError = e.message;
     }
-    await sleep(store.settings.requestDelayMs);
     if (info) await resolveActorNames(v.code, info, ctx, log, prevActors);
   }
 
   // 2) 품번기 (r18.dev에 없는 작품)
   if (!info && store.settings.usePoomki && !ctx.skipPoomki) {
     try {
-      const r = await poomki.lookup(v.code, { gapMs: poomkiGap() });
+      const r = await poomkiLookup(v.code);
       if (r.found) info = r.data;
       else {
         log(`품번기에서도 찾지 못함: ${v.code} (${r.reason})`);
@@ -444,7 +457,6 @@ async function processVideo(v, log, ctx) {
     } catch (e) {
       log(`품번기 오류: ${v.code} — ${e.message}`);
     }
-    await sleep(poomkiGap());
   }
 
   if (info) {
@@ -526,22 +538,30 @@ async function organizeBody(mode, ids) {
   send('organize:progress', { done: 0, total, current: '' });
   if (!total && mode !== 'translate') log('정리할 영상이 없어요.');
 
+  // 여러 영상을 동시에 처리 (사이트마다 요청은 SiteGate가 차례대로)
   let done = 0;
-  for (const v of list) {
-    if (job.cancelled) break;
-    send('organize:progress', { done, total, current: v.code || v.fileName });
-    try {
-      await processVideo(v, log, ctx);
-    } catch (e) {
-      v.status = 'error';
-      v.lastError = e.message;
-      log(`오류: ${v.fileName} — ${e.message}`);
+  let next = 0;
+  const working = new Set();
+  const worker = async () => {
+    while (!job.cancelled && next < list.length) {
+      const v = list[next++];
+      working.add(v.code || v.fileName);
+      send('organize:progress', { done, total, current: [...working].join(', ') });
+      try {
+        await processVideo(v, log, ctx);
+      } catch (e) {
+        v.status = 'error';
+        v.lastError = e.message;
+        log(`오류: ${v.fileName} — ${e.message}`);
+      }
+      working.delete(v.code || v.fileName);
+      store.save();
+      send('video:changed', v);
+      done++;
+      send('organize:progress', { done, total, current: [...working].join(', ') });
     }
-    store.save();
-    send('video:changed', v);
-    done++;
-    send('organize:progress', { done, total });
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(ORGANIZE_WORKERS, list.length) }, worker));
   // 전에 번역을 못 한 제목이 있으면 이어서 번역 (사이트에는 다시 묻지 않음)
   if (!job.cancelled && store.settings.translateTitles !== false && !ctx.skipTranslate) {
     const rest = Object.values(store.videos).filter((x) => !x.missing && !x.locked && x.titleJa && !x.titleKo).slice(0, 500);

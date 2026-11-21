@@ -202,7 +202,7 @@ export function SettingsPage({ lib, onLib, onSettings, onRelocate, onRetranslate
           <span style={{ color: 'var(--muted)' }}>요청 간격</span>
           <input type="number" min="500" step="250" value={s.requestDelayMs} style={{ width: 90 }}
             onChange={(e) => onSettings({ requestDelayMs: Math.max(500, Number(e.target.value) || 1500) })} />
-          <span style={{ color: 'var(--muted)' }}>ms (품번기는 이 값과 상관없이 최소 2.5초씩 쉬어요)</span>
+          <span style={{ color: 'var(--muted)' }}>ms — 품번기에 물을 때 쉬는 간격 (최소 1.5초). r18.dev·번역은 따로 짧게 쉬어요</span>
         </div>
       </div>
 

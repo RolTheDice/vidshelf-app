@@ -148,7 +148,7 @@ test('r18.dev 찾기: dvd_id로 안 잡히면 content_id를 추측해서 찾고,
   const r = await client.lookup('ABCD-370', { rules });
   assert.strictEqual(r.found, true, JSON.stringify(r));
   assert.strictEqual(r.data.code, 'ABCD-370');
-  assert.ok(calls[0].includes('dvd_id=abcd-370'));
+  assert.ok(calls[0].includes('dvd_id=abcd370'));
   const miss = await client.lookup('ZZZZ-999');
   assert.strictEqual(miss.found, false);
   assert.ok(/없는 품번/.test(miss.reason));
