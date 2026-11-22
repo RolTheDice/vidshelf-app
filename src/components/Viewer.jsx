@@ -59,7 +59,9 @@ export default function Viewer({ video, emptyText, onUpdate, onGo, onEdit, onRef
           <Icon name="heart" size={20} fill={v.favorite} />
         </button>
       </div>
-      <div className="v-title">{v.title || (v.lastError ? `정보 없음 — ${v.lastError}` : '아직 정보를 가져오지 않았어요')}</div>
+      <div className="v-title">{v.title || (v.status === 'done'
+        ? '제목 정보가 아직 없어요 — r18.dev에 올라오면 정리할 때 자동으로 채워요'
+        : v.lastError ? `정보 없음 — ${v.lastError}` : '아직 정보를 가져오지 않았어요')}</div>
       {v.titleJa && v.titleJa !== v.title && <div className="v-title-ja" title="원제 (일본어)">{v.titleJa}</div>}
 
       <div className="info">
@@ -87,8 +89,15 @@ export default function Viewer({ video, emptyText, onUpdate, onGo, onEdit, onRef
         <span className="k">용량 · 재생</span>
         <span className="v" style={{ color: 'var(--muted)' }}>
           {fmtSize(v.size)} · {v.playCount || 0}회 재생
+          <span className="pc-adj">
+            <button className="btn xs ghost" title="재생 횟수 1 줄이기" disabled={!v.playCount}
+              onClick={() => window.vs.changePlayCount(v.id, -1).then(onUpdate)}>−1</button>
+            <button className="btn xs ghost" title="재생 횟수 1 늘리기 (다른 곳에서 본 경우 등)"
+              onClick={() => window.vs.changePlayCount(v.id, 1).then(onUpdate)}>+1</button>
+          </span>
           {v.lastPlayed ? ` · 마지막 재생 ${new Date(v.lastPlayed).toLocaleDateString('ko-KR')}` : ''}
           {v.lastPosition > 10 ? ` · ${fmtTime(v.lastPosition)}까지 봄` : ''}
+          {v.hasSub ? ' · 자막 있음' : ''}
         </span>
       </div>
 

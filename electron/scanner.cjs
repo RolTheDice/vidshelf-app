@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { extractCode } = require('./code.cjs');
+const { hasSubtitleIn } = require('./subtitles.cjs');
 
 const SKIP_DIRS = new Set(['$recycle.bin', 'system volume information', 'covers', 'node_modules']);
 
@@ -37,6 +38,12 @@ async function scanFolder(store, folder, findExistingCover, newIds = new Set()) 
   const exts = new Set(store.settings.extensions.map((x) => x.toLowerCase()));
   const seen = new Set();
   let added = 0;
+  // 영상 옆 자막이 있는지 (폴더마다 파일 이름 목록은 한 번만 읽음)
+  const dirNames = new Map();
+  const namesIn = async (dir) => {
+    if (!dirNames.has(dir)) dirNames.set(dir, await fs.promises.readdir(dir).catch(() => []));
+    return dirNames.get(dir);
+  };
   // folder.only가 있으면 그 파일들만 (끌어다 놓은 개별 파일), 없으면 폴더 전체
   const visit = folder.only
     ? async (cb) => { for (const f of folder.only) await cb(f); }
@@ -65,6 +72,7 @@ async function scanFolder(store, folder, findExistingCover, newIds = new Set()) 
       v.size = st.size; v.mtime = st.mtimeMs; v.missing = false; v.folderId = folder.id;
     }
     if (!v.cover || !fs.existsSync(v.cover)) v.cover = findExistingCover(v);
+    v.hasSub = hasSubtitleIn(await namesIn(path.dirname(file)), file);
   });
   let missing = 0;
   for (const v of Object.values(store.videos)) {

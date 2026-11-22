@@ -112,6 +112,8 @@ class R18Client {
     const dvd = String(code || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const first = await this.getJson(`${BASE}/videos/vod/movies/detail/-/dvd_id=${encodeURIComponent(dvd)}/json`);
     if (first.status === 403 || first.status === 429) return { found: false, blocked: true, reason: `r18.dev가 접속을 막았어요 (HTTP ${first.status})` };
+    // 연결이 끊기거나 서버 오류: 없는 작품으로 치지 않고 다음 정리 때 다시
+    if (!first.status || first.status >= 500) return { found: false, transient: true, reason: `r18.dev 연결 문제 (${first.status || '응답 없음'})` };
     let full = null;
     if (first.status === 200 && first.json && first.json.content_id && contentMatches(first.json.content_id, code)) {
       full = await this._combined(first.json.content_id);

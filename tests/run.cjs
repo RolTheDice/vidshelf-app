@@ -11,6 +11,7 @@ const { nameToHangul, kanaToHangul, nameSimilarity } = require('../electron/kana
 const { mapGenres } = require('../electron/genres-ko.cjs');
 const { translateJaKo, translateDeepl, deeplUsage } = require('../electron/translate.cjs');
 const { readKeyframes } = require('../electron/keyframes.cjs');
+const { findSubtitles, parseSubtitle, decodeText } = require('../electron/subtitles.cjs');
 const { findMovieLinks, extractPoomkiDetail } = require('../electron/poomki-extract.cjs');
 const { imageSize, isValidCover, findCover, coverPathFor, findExistingCover } = require('../electron/cover.cjs');
 const { Store } = require('../electron/db.cjs');
@@ -154,6 +155,9 @@ test('r18.dev 찾기: dvd_id로 안 잡히면 content_id를 추측해서 찾고,
   assert.ok(/없는 품번/.test(miss.reason));
   const blocked = await new R18Client(async () => ({ status: 403, json: null }), { guessGapMs: 0 }).lookup('ABCD-370');
   assert.strictEqual(blocked.blocked, true);
+  const down = await new R18Client(async () => ({ status: 0, json: null }), { guessGapMs: 0 }).lookup('ABCD-370');
+  assert.strictEqual(down.transient, true, '연결이 안 되면 없는 작품이 아니라 다음에 다시');
+  assert.strictEqual((await new R18Client(async () => ({ status: 502, json: null }), { guessGapMs: 0 }).lookup('ABCD-370')).transient, true);
 });
 
 test('제목 번역: 배우 이름은 정해 둔 한국어로 바꿔 넣고, 응답 조각을 이어 붙임, 실패하면 null', async () => {
@@ -165,6 +169,9 @@ test('제목 번역: 배우 이름은 정해 둔 한국어로 바꿔 넣고, 응
   assert.ok(asked.includes('야마다 하나코') && !asked.includes('山田花子'), asked);
   assert.strictEqual(ok, '야마다 하나코의 작품. 계속');
   assert.strictEqual(await translateJaKo('テスト', async () => ({ status: 429, json: null })), null);
+  let lang = '';
+  await translateJaKo('Big Tits', async (url) => { lang = new URL(url).searchParams.get('sl'); return { status: 200, json: [[['거유', 'x']]] }; }, { from: 'en' });
+  assert.strictEqual(lang, 'en', '원제가 없으면 영어 제목·장르를 영어에서 번역');
   assert.strictEqual(await translateJaKo('', async () => ({ status: 200, json: [] })), null);
 });
 
@@ -193,6 +200,27 @@ test('MP4 기준 화면 시각 읽기 (B프레임·편집 목록 보정), MP4가
   const k = await readKeyframes(path.join(__dirname, 'fixtures', 'keyframes.mp4'));
   assert.deepStrictEqual(k, [0, 1.32, 2.6, 3.92]); // ffprobe로 확인한 값 (25fps, 1.3초마다 강제 기준 화면)
   assert.strictEqual(await readKeyframes(path.join(__dirname, 'fixtures', 'poomki-detail.html')), null);
+});
+
+test('자막: 같은 이름의 자막 찾기(한국어 표시 우선), SMI·SRT·ASS 읽기, CP949 글자', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-sub-'));
+  for (const n of ['ABC-123.mp4', 'ABC-123.smi', 'ABC-123.ko.srt', 'ABC-123.en.ass', 'ABC-1234.srt', 'XYZ-001.srt', 'ABC-123.txt']) fs.writeFileSync(path.join(dir, n), '');
+  assert.deepStrictEqual(findSubtitles(path.join(dir, 'ABC-123.mp4')).map((x) => x.name), ['ABC-123.ko.srt', 'ABC-123.smi', 'ABC-123.en.ass']);
+
+  const smi = '<SAMI><BODY>\n<SYNC Start=1000><P Class=ENCC>Hello\n<SYNC Start=1000><P Class=KRCC>안녕<br>하세요\n<SYNC Start=3000><P Class=KRCC>&nbsp;\n<SYNC Start=4000><P Class=KRCC><font color=red>A &amp; B</font>\n</BODY></SAMI>';
+  const c = parseSubtitle(smi, 'smi');
+  assert.deepStrictEqual(c.map((x) => [x.s, x.t]), [[1, '안녕\n하세요'], [4, 'A & B']]);
+  assert.strictEqual(c[0].e, 3);
+
+  const srt = parseSubtitle('1\r\n00:00:01,500 --> 00:00:03,000\r\n<i>첫 줄</i>\r\n\r\n2\r\n00:01:04.250 --> 00:01:05.000 position:10%\r\n둘\r\n셋\r\n', 'srt');
+  assert.deepStrictEqual(srt, [{ s: 1.5, e: 3, t: '첫 줄' }, { s: 64.25, e: 65, t: '둘\n셋' }]);
+
+  const ass = parseSubtitle('[Script Info]\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:02.00,0:00:03.50,Default,,0,0,0,,{\\an8}가, 나\\N다\n', 'ass');
+  assert.deepStrictEqual(ass, [{ s: 2, e: 3.5, t: '가, 나\n다' }]);
+
+  // CP949(EUC-KR)로 저장된 "안녕" / UTF-8 BOM
+  assert.strictEqual(decodeText(Buffer.from([0xbe, 0xc8, 0xb3, 0xe7])), '안녕');
+  assert.strictEqual(decodeText(Buffer.from([0xef, 0xbb, 0xbf, ...Buffer.from('자막')])), '자막');
 });
 
 // ---------------------------------------------------------------- 표지 주소 (스스로 배우는 방식)

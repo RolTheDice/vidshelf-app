@@ -6,6 +6,7 @@ const SNAP_RANGE = 2; // ←/→ 기준 화면 맞춤 허용 범위(초): 10초 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 // 소리 크기 자동 맞춤: 영상마다 소리가 크고 작은 걸 비슷하게. 들어오는 소리 크기를 재서 천천히 키우거나 줄이고,
 // 갑자기 큰 소리는 압축기로 눌러 준다. 영상마다 잰 크기는 기억해서 다음에 열면 처음부터 맞춘다.
+const COUNT_SEC = 40; // 재생 1회로 세는 시청 시간(초)
 const TARGET_DB = -20; // 맞출 평균 소리 크기 (dBFS)
 const MAX_BOOST_DB = 15;
 const MAX_CUT_DB = -12;
@@ -42,6 +43,14 @@ export default function Player({
   const seekTarget = useRef(null); // ←/→로 가려는 위치 (건너뛰는 중에 더 누르면 여기만 바뀜)
   const keyframes = useRef(null); // 기준 화면 시각 목록 (MP4). 여기에 맞춰 건너뛰면 거의 바로 나온다
   const [autoLevel, setAutoLevel] = useState(load('vs.autoLevel', true));
+  // 자막: 영상 옆에 같은 이름의 자막 파일이 있으면 자동으로 띄운다
+  const [subs, setSubs] = useState([]); // [{file, label, name}]
+  const [subFile, setSubFile] = useState(null);
+  const [subOn, setSubOn] = useState(load('vs.subOn', true));
+  const [subOffset, setSubOffset] = useState(0); // 초 (+면 자막을 늦게)
+  const [subText, setSubText] = useState('');
+  const [subSize, setSubSize] = useState(22);
+  const cues = useRef([]);
   const audio = useRef(null); // Web Audio 연결 (처음 재생할 때 만들고 계속 씀)
   const [error, setError] = useState('');
   const [resumeAt, setResumeAt] = useState(0);
@@ -98,6 +107,63 @@ export default function Player({
   };
   const autoLevelRef = useRef(autoLevel);
   useEffect(() => { autoLevelRef.current = autoLevel; keep('vs.autoLevel', autoLevel); route(); }, [autoLevel]);
+
+  // 자막 목록 읽기
+  useEffect(() => {
+    let dead = false;
+    cues.current = []; setSubs([]); setSubFile(null); setSubText(''); setSubOffset(0);
+    window.vs.subtitles(video.id).then((list) => {
+      if (dead || !Array.isArray(list)) return;
+      setSubs(list);
+      if (list.length) setSubFile(list[0].file);
+    }).catch(() => {});
+    return () => { dead = true; };
+  }, [video.id]);
+  useEffect(() => {
+    let dead = false;
+    cues.current = []; setSubText('');
+    if (!subFile) return undefined;
+    window.vs.loadSubtitle(video.id, subFile).then((c) => { if (!dead && Array.isArray(c)) cues.current = c; }).catch(() => {});
+    return () => { dead = true; };
+  }, [video.id, subFile]);
+  useEffect(() => { keep('vs.subOn', subOn); }, [subOn]);
+  // 지금 시각의 자막 (화면을 그릴 때마다 확인해서 대사와 정확히 맞춤)
+  useEffect(() => {
+    let raf = 0;
+    const step = () => {
+      const v = vid.current;
+      const c = cues.current;
+      let text = '';
+      if (v && subOn && c.length) {
+        const t = v.currentTime - subOffset;
+        let lo = 0, hi = c.length - 1, idx = -1;
+        while (lo <= hi) { const mid = (lo + hi) >> 1; if (c[mid].s <= t) { idx = mid; lo = mid + 1; } else hi = mid - 1; }
+        // 겹치는 자막은 함께
+        const shown = [];
+        for (let i = idx; i >= 0 && i > idx - 4; i--) if (c[i].s <= t && t < c[i].e) shown.unshift(c[i].t);
+        text = shown.join('\n');
+      }
+      setSubText((old) => (old === text ? old : text));
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [subOn, subOffset, subFile]);
+  // 자막 글자 크기: 플레이어 높이에 맞춤
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(() => setSubSize(Math.max(15, Math.round(el.clientHeight * 0.048))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const nudgeSub = (d) => {
+    setSubOffset((x) => {
+      const n = Math.round((x + d) * 10) / 10;
+      showOsd(`자막 ${n === 0 ? '원래대로' : `${n > 0 ? '+' : ''}${n}초 (${n > 0 ? '늦게' : '빠르게'})`}`, 1200);
+      return n;
+    });
+  };
 
   // 영상이 바뀌면 전에 재 둔 소리 크기로 시작
   useEffect(() => {
@@ -178,8 +244,8 @@ export default function Player({
     const d = t - lastT.current;
     if (d > 0 && d < 2) watched.current += d; // 건너뛰기는 시청 시간에 넣지 않음
     lastT.current = t;
-    // 재생 횟수: 1분 이상(짧은 영상은 절반 이상) 보면 1회
-    if (!counted.current && v.duration && watched.current >= Math.min(60, v.duration * 0.5)) {
+    // 재생 횟수: 합쳐서 40초 이상(짧은 영상은 절반 이상) 보면 1회
+    if (!counted.current && v.duration && watched.current >= Math.min(COUNT_SEC, v.duration * 0.5)) {
       counted.current = true;
       window.vs.markPlayed(video.id).then((nv) => nv && onCounted(nv));
     }
@@ -196,6 +262,10 @@ export default function Player({
       ArrowDown: () => setVolume((x) => Math.max(0, +(x - 0.05).toFixed(2))),
       f: fullscreen, F: fullscreen, m: () => setMuted((x) => !x),
       l: () => setAutoLevel((x) => !x), L: () => setAutoLevel((x) => !x),
+      c: () => subs.length && setSubOn((x) => { showOsd(x ? '자막 끔' : '자막 켬'); return !x; }),
+      C: () => subs.length && setSubOn((x) => { showOsd(x ? '자막 끔' : '자막 켬'); return !x; }),
+      ',': () => subs.length && nudgeSub(-0.5), '<': () => subs.length && nudgeSub(-0.5),
+      '.': () => subs.length && nudgeSub(0.5), '>': () => subs.length && nudgeSub(0.5),
       n: () => hasNext && onNext(), p: () => hasPrev && onPrev(),
       t: () => onWide && onWide(), T: () => onWide && onWide(),
     }[k];
@@ -259,6 +329,11 @@ export default function Player({
         onError={() => setError('이 파일은 내장 플레이어로 재생할 수 없어요.')} />
 
       {seekOsd && <div className="p-seek-osd">{seekOsd}</div>}
+      {subOn && subText && (
+        <div className={`p-sub ${showUi || !playing ? 'lift' : ''}`} style={{ fontSize: subSize }}>
+          {subText.split('\n').map((l, i) => <div key={i}><span>{l}</span></div>)}
+        </div>
+      )}
 
       {error && (
         <div className="p-error">
@@ -292,6 +367,15 @@ export default function Player({
           <button className="p-btn" onClick={() => setMuted((x) => !x)} title="음소거 (M)"><Icon name={muted || volume === 0 ? 'mute' : 'volume'} size={18} /></button>
           <input className="p-vol" type="range" min="0" max="1" step="0.05" value={muted ? 0 : volume}
             onChange={(e) => { setMuted(false); setVolume(Number(e.target.value)); }} />
+          {subs.length > 0 && (<>
+            <button className={`p-btn p-text ${subOn ? 'on' : ''}`} onClick={() => setSubOn((x) => !x)}
+              title={`자막 ${subOn ? '켜짐' : '꺼짐'} (C) · 싱크: , 빠르게 / . 늦게${subOffset ? ` · 지금 ${subOffset > 0 ? '+' : ''}${subOffset}초` : ''}`}>자막</button>
+            {subs.length > 1 && (
+              <select className="p-speed" value={subFile || ''} onChange={(e) => setSubFile(e.target.value)} title="자막 파일">
+                {subs.map((x) => <option key={x.file} value={x.file}>{x.label}</option>)}
+              </select>
+            )}
+          </>)}
           <button className={`p-btn p-text ${autoLevel ? 'on' : ''}`} onClick={() => setAutoLevel((x) => !x)}
             title={autoLevel ? '소리 크기 자동 맞춤 켜짐: 영상마다 다른 소리 크기를 비슷하게 맞춰요 (L)' : '소리 크기 자동 맞춤 꺼짐 (L)'}>음량 맞춤</button>
           <select className="p-speed" value={speed} onChange={(e) => setSpeed(Number(e.target.value))} title="재생 속도">

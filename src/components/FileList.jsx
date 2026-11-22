@@ -81,6 +81,7 @@ export default function FileList({
                 <div className="s">
                   {(v.actors?.length ? v.actors.join(', ') : '배우 정보 없음')} · {v.maker || '-'} · {fmtSize(v.size)}
                   {v.playCount ? ` · ${v.playCount}회 재생` : ''}
+                  {v.hasSub ? <span className="sub-tag" title="자막 파일 있음">자막</span> : null}
                 </div>
               </div>
               <span className={`sdot ${v.status}`} title={STATUS_LABEL[v.status]} />

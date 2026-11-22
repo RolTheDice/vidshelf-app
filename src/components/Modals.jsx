@@ -10,7 +10,6 @@ export function OrganizeModal({ videos, settings = {}, progress, onStart, onCanc
   const fresh = live.filter((v) => v.status === 'new' || (v.status === 'done' && !v.cover)).length;
   const failed = live.filter((v) => ['notfound', 'coveronly', 'error'].includes(v.status)).length;
   const noCode = live.filter((v) => !v.code).length;
-  const legacy = live.filter((v) => v.code && v.status === 'done' && (!v.infoSource || v.infoSource === 'avdbs')).length;
   const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
   const started = progress.running || progress.finished;
 
@@ -25,17 +24,10 @@ export function OrganizeModal({ videos, settings = {}, progress, onStart, onCanc
             <div className="stat"><div className="l">새 영상</div><div className="n">{fresh}</div></div>
             <div className="stat"><div className="l">정보 못 찾은 영상</div><div className="n">{failed}</div></div>
             <div className="stat"><div className="l">품번 없음</div><div className="n">{noCode}</div></div>
-            {legacy > 0 && <div className="stat"><div className="l">예전(avdbs) 정보</div><div className="n">{legacy}</div></div>}
           </div>
           <div className="sub" style={{ fontSize: 12 }}>
             시작하면 등록한 폴더를 먼저 다시 읽어서 새로 넣은 파일을 찾아요. 이미 정리한 영상은 건너뛰고, 같은 품번이 이미 정리돼 있으면 사이트에 다시 묻지 않고 그 정보를 그대로 써요.
           </div>
-          {legacy > 0 && (
-            <div className="sub" style={{ fontSize: 12 }}>
-              <b>예전 정보 새로 받기</b>: avdbs로 받아 둔 {legacy}개를 r18.dev 정보로 새로 받아요. 장르·발매일·재생시간·표지 주소가 새로 들어가고,
-              그때의 한국어 배우·제작사·레이블·시리즈 이름과 제목·줄거리는 그대로 남겨서 배우 사진·별점·즐겨찾기가 그대로 이어져요.
-            </div>
-          )}
 
         </>)}
 
@@ -54,7 +46,6 @@ export function OrganizeModal({ videos, settings = {}, progress, onStart, onCanc
           {!started && (<>
             <button className="btn ghost" onClick={onClose}>닫기</button>
             <button className="btn ghost" onClick={() => onStart('all')} title="이미 정리한 영상까지 전부 다시 받아요">전체 다시 받기</button>
-            {legacy > 0 && <button className="btn" onClick={() => onStart('legacy')}><Icon name="refresh" size={14} />예전 정보 새로 받기 ({legacy})</button>}
             <button className="btn" onClick={() => onStart('retry')} disabled={!failed}><Icon name="refresh" size={14} />못 찾은 것 다시 시도 ({failed})</button>
             <button className="btn primary" onClick={() => onStart('new')}><Icon name="wand" size={14} />새 영상 정리</button>
           </>)}

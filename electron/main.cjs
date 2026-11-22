@@ -6,6 +6,7 @@ const { Store } = require('./db.cjs');
 const { scanFolder, reconcileMoves } = require('./scanner.cjs');
 const { handleMediaRequest } = require('./media.cjs');
 const { readKeyframes } = require('./keyframes.cjs');
+const { findSubtitles, loadSubtitle } = require('./subtitles.cjs');
 const { extractCode } = require('./code.cjs');
 const { R18Client } = require('./r18.cjs');
 const { PoomkiClient } = require('./poomki.cjs');
@@ -48,7 +49,17 @@ class SiteGate {
 const gate = new SiteGate();
 const ORGANIZE_WORKERS = 3; // 동시에 정리하는 영상 수 (사이트마다 요청은 위 차례대로)
 
-const r18 = new R18Client((url) => gate.run('r18', 250, () => fetchJson(url)), { guessGapMs: 0 });
+// r18.dev: 너무 잦다(429)·서버 오류·연결 끊김이면 잠깐 쉬었다가 다시 (3초 → 10초 → 30초)
+async function r18Get(url) {
+  const waits = [3000, 10000, 30000];
+  for (let i = 0; ; i++) {
+    let r;
+    try { r = await fetchJson(url); } catch (_) { r = { status: 0, json: null }; }
+    if ((r.status && r.status !== 429 && r.status < 500) || i >= waits.length) return r;
+    await sleep(waits[i]);
+  }
+}
+const r18 = new R18Client((url) => gate.run('r18', 250, () => r18Get(url)), { guessGapMs: 0 });
 
 // POST 등 요청 (DeepL)
 async function requestJson(url, init = {}) {
@@ -163,7 +174,7 @@ const isBlocked = (name) => (store.settings.blockedActors || []).includes(name);
 // 이름 대응표: 배우(일본어 이름 → 한국어), 제작사·레이블(영어 → 한국어). 한 번 정하면 다음 작품부터 그대로 쓴다
 function nameMaps() {
   const n = store.data.names || (store.data.names = {});
-  for (const k of ['actors', 'maker', 'label', 'series', 'director']) n[k] = n[k] || {};
+  for (const k of ['actors', 'maker', 'label', 'series', 'director', 'genre']) n[k] = n[k] || {};
   return n;
 }
 
@@ -254,7 +265,7 @@ function applyInfo(v, d, { legacy = false } = {}) {
   const maps = nameMaps();
   // 예전(avdbs) 정보를 새로 받을 때: 그때의 한국어 제작사·레이블·시리즈·감독 이름을 기억해서 계속 쓴다
   if (legacy) {
-    const learn = (kind, from, ko) => { if (from && ko && !maps[kind][from]) maps[kind][from] = ko; };
+    const learn = (kind, from, ko) => { if (from && ko && hasHangul(ko) && !maps[kind][from]) maps[kind][from] = ko; };
     learn('maker', d.maker, v.maker);
     learn('label', d.label, v.label);
     learn('series', d.series, v.series);
@@ -262,14 +273,16 @@ function applyInfo(v, d, { legacy = false } = {}) {
   }
   const ml = koreanMakerLabel(v.code, d);
   const oldTitle = v.title;
-  const sameJa = !!(d.titleJa && d.titleJa === v.titleJa);
+  // 전에 번역해 둔 제목의 원문(일본어, 없으면 영어)이 그대로면 번역을 다시 하지 않음
+  const sameJa = d.titleJa ? d.titleJa === v.titleJa : !!(d.title && d.title === v.titleEn);
   if (legacy && oldTitle) { v.title = oldTitle; v.titleKo = v.titleKo || oldTitle; } // 예전 한국어 제목은 그대로
   else if (v.titleKo && sameJa) v.title = v.titleKo; // 전에 번역해 둔 제목
   else { v.titleKo = ''; v.title = d.title || oldTitle; } // 번역 전에는 영어 제목 (processVideo에서 번역)
   v.titleEn = d.source === 'r18' ? d.title : (v.titleEn || '');
   v.titleJa = d.titleJa || '';
   v.seriesJa = d.seriesJa || '';
-  v.actors = d.actors.map((a) => a.name);
+  // 새 정보에 배우가 없으면(예: r18.dev에 출연 정보가 빈 작품) 전에 받아 둔 배우는 남긴다
+  v.actors = d.actors.length ? d.actors.map((a) => a.name) : (v.actors || []).filter((n) => !isBlocked(n));
   v.maker = ml.maker;
   v.label = ml.label;
   v.series = (d.series && maps.series[d.series]) || d.series || '';
@@ -282,7 +295,7 @@ function applyInfo(v, d, { legacy = false } = {}) {
   v.poomkiId = d.poomkiId || null;
   v.infoSource = d.source;
   for (const a of d.actors) {
-    store.ensureActor(a.name, { ja: a.ja, kana: a.kana, r18Id: a.r18Id, photoUrl: a.photoKo || a.photo, photoUrl2: a.photoKo ? a.photo : '' });
+    store.ensureActor(a.name, { ja: a.ja, kana: a.kana, romaji: a.romaji, r18Id: a.r18Id, photoUrl: a.photoKo || a.photo, photoUrl2: a.photoKo ? a.photo : '' });
   }
 }
 
@@ -377,10 +390,10 @@ function reuseFrom(v, donor, log) {
 }
 
 // 번역 한 번: DeepL 키가 있으면 DeepL, 없거나 DeepL이 안 되면 구글
-async function translateText(text, names, ctx, log) {
+async function translateText(text, names, ctx, log, from = 'ja') {
   const key = String(store.settings.deeplKey || '').trim();
   if (key && !ctx.deeplOff) {
-    const r = await gate.run('deepl', 150, () => translateDeepl(text, key, requestJson, { names })).catch(() => ({ text: null, status: 0 }));
+    const r = await gate.run('deepl', 150, () => translateDeepl(text, key, requestJson, { names, from })).catch(() => ({ text: null, status: 0 }));
     if (r.text) return { text: r.text, by: 'deepl' };
     if (r.status === 403 || r.status === 456) {
       ctx.deeplOff = true;
@@ -388,47 +401,79 @@ async function translateText(text, names, ctx, log) {
         : 'DeepL 이번 달 무료 글자 수를 다 써서 구글 번역으로 바꿔요.');
     }
   }
-  const t = await gate.run('google', 500, () => translateJaKo(text, fetchJson, { names })); // 구글이 너무 잦은 요청을 막지 않게
+  const t = await gate.run('google', 500, () => translateJaKo(text, fetchJson, { names, from })); // 구글이 너무 잦은 요청을 막지 않게
   return { text: t, by: 'google' };
 }
 
 // 제목(과 시리즈 이름)을 일본어 원제에서 한국어로 번역. 실패가 이어지면 이번 정리에서는 멈춘다
+const hasHangul = (x) => /[가-힣]/.test(String(x || ''));
+// 아직 한국어가 아닌 것: 원제(일본어)가 없어 영어로 남은 제목, 표에 없어 영어로 남은 장르
+const needsTranslate = (v) => !v.missing && !v.locked && v.infoSource === 'r18'
+  && ((!v.titleKo && (v.titleJa || (v.titleEn && !hasHangul(v.title)))) || (v.genres || []).some((g) => !hasHangul(g)));
+
+// 제목·시리즈·장르를 한국어로 번역. 실패가 이어지면 이번 정리에서는 멈춘다
 async function translateVideo(v, log, ctx) {
   if (store.settings.translateTitles === false || ctx.skipTranslate || v.locked) return;
-  const names = (v.actors || []).map((n) => ({ ja: store.actors[n] && store.actors[n].ja, ko: n }));
+  // 배우 이름은 정해 둔 한국어로 바꿔 넣고 번역 (일본어 이름, 영어 로마자 이름 둘 다)
+  const names = (v.actors || []).flatMap((n) => {
+    const a = store.actors[n] || {};
+    return [{ ja: a.ja, ko: n }, { ja: a.romaji, ko: n }, { ja: a.romaji && a.romaji.split(' ').reverse().join(' '), ko: n }];
+  }).filter((x) => x.ja);
   const fail = () => {
     if (++ctx.translateFails >= 3) { ctx.skipTranslate = true; log('번역이 계속 실패해서 이번 정리에서는 번역을 멈춰요 (다음 정리 때 다시 시도해요).'); }
   };
   try {
-    if (v.titleJa && !v.titleKo) {
-      const r = await translateText(v.titleJa, names, ctx, log);
+    if (!v.titleKo && (v.titleJa || (v.titleEn && !hasHangul(v.title)))) {
+      // 일본어 원제가 없는 작품(예: SOD)은 영어 제목을 번역
+      const from = v.titleJa ? 'ja' : 'en';
+      const r = await translateText(v.titleJa || v.titleEn, names, ctx, log, from);
       if (r.text) { v.titleKo = r.text; v.title = r.text; v.titleBy = r.by; ctx.translateFails = 0; } else fail();
     }
     const maps = nameMaps();
-    if (v.seriesJa && v.series && !/[가-힣]/.test(v.series) && !ctx.skipTranslate) {
+    if (v.series && !hasHangul(v.series) && !ctx.skipTranslate) {
       const key = v.series;
       if (!maps.series[key]) {
-        const r = await translateText(v.seriesJa, names, ctx, log);
+        const r = await translateText(v.seriesJa || v.series, names, ctx, log, v.seriesJa ? 'ja' : 'en');
         if (r.text) maps.series[key] = r.text; else fail();
       }
       if (maps.series[key]) v.series = maps.series[key];
     }
+    // 장르 표에 없어 영어로 남은 장르 (한 번 번역하면 기억)
+    if ((v.genres || []).some((g) => !hasHangul(g)) && !ctx.skipTranslate) {
+      const out = [];
+      for (const g of v.genres) {
+        if (hasHangul(g) || /^[A-Z0-9]{1,4}$/.test(g)) { out.push(g); continue; } // 3P·4K·VR 같은 건 그대로
+        if (!maps.genre[g] && !ctx.skipTranslate) {
+          const r = await translateText(g, [], ctx, log, 'en');
+          if (r.text) maps.genre[g] = r.text; else fail();
+        }
+        out.push(maps.genre[g] || g);
+      }
+      v.genres = [...new Set(out)];
+    }
   } catch (_) { fail(); }
 }
+
+// 정보가 일부만 있는 영상: r18.dev에 아직 없어서 품번기 정보(제목·장르 없음)만 받았거나, 예전(avdbs) 정보에 제목이 없던 것
+const isPartial = (v) => v.status === 'done' && !v.locked
+  && (v.infoSource === 'poomki' || ((!v.infoSource || v.infoSource === 'avdbs') && !v.title));
+const PARTIAL_RETRY_MS = 12 * 3600 * 1000; // 이런 영상은 정리할 때 12시간에 한 번씩 r18.dev에 다시 물어본다
 
 async function processVideo(v, log, ctx) {
   if (!v.code) { v.status = 'nocode'; log(`품번을 찾지 못함: ${v.fileName}`); return; }
 
+  const partial = isPartial(v);
   const donor = ctx.fresh.get(v.code) || (ctx.mode !== 'all' && ctx.mode !== 'legacy'
-    ? Object.values(store.videos).find((o) => o.id !== v.id && o.code === v.code && o.status === 'done')
+    ? Object.values(store.videos).find((o) => o.id !== v.id && o.code === v.code && o.status === 'done' && !isPartial(o))
     : null);
   if (donor) { reuseFrom(v, donor, log); return; }
 
   let info = null;
   // 예전(avdbs)에 받아 둔 영상인지: 그때의 한국어 이름들을 그대로 이어 쓰기 위해
-  const legacy = v.status === 'done' && (!v.infoSource || v.infoSource === 'avdbs');
+  const legacy = v.status === 'done' && (!v.infoSource || v.infoSource === 'avdbs' || v.infoSource === 'poomki');
   const prevActors = legacy ? [...(v.actors || [])] : [];
   // 1) r18.dev (주 정보원)
+  let r18Trouble = !!ctx.skipR18 && store.settings.useR18 !== false; // r18.dev에 못 물어본 경우 (없는 작품과 구분)
   if (store.settings.useR18 !== false && !ctx.skipR18) {
     try {
       const r = await r18.lookup(v.code, { rules: store.data.coverRules });
@@ -437,12 +482,27 @@ async function processVideo(v, log, ctx) {
         log(`r18.dev에서 찾지 못함: ${v.code} (${r.reason})`);
         v.lastError = r.reason;
         if (r.blocked) { ctx.skipR18 = true; log('r18.dev가 접속을 막아서 이번 정리에서는 r18.dev 검색을 멈춰요.'); }
+        r18Trouble = !!(r.transient || r.blocked);
       }
     } catch (e) {
       log(`r18.dev 오류: ${v.code} — ${e.message}`);
       v.lastError = e.message;
+      r18Trouble = true;
     }
     if (info) await resolveActorNames(v.code, info, ctx, log, prevActors);
+  }
+
+  // r18.dev에 연결이 안 됐으면 품번기 정보(제목·장르 없음)로 채우지 않고, 다음 정리 때 다시 r18.dev부터
+  if (!info && r18Trouble) {
+    if (!partial && v.status !== 'done') v.status = 'error';
+    return;
+  }
+
+  // 일부 정보만 있는 영상을 다시 물었는데 r18.dev에 아직 없으면: 있던 정보는 그대로 두고 다음에 다시
+  if (!info && partial) {
+    v.partialTriedAt = Date.now();
+    v.lastError = null;
+    return;
   }
 
   // 2) 품번기 (r18.dev에 없는 작품)
@@ -507,7 +567,9 @@ function pickTargets(mode) {
   if (mode === 'translate') return []; // 제목 번역만 (아래 번역 단계에서 처리)
   // 예전(avdbs)에 받아 둔 영상을 r18.dev로 새로 받기
   if (mode === 'legacy') return live.filter((v) => v.code && v.status === 'done' && (!v.infoSource || v.infoSource === 'avdbs'));
-  return live.filter((v) => v.status === 'new' || (v.status === 'done' && !v.cover));
+  // 새 영상 + 표지 없는 영상 + 정보가 일부만 있는 영상(12시간에 한 번 r18.dev에 다시 확인)
+  return live.filter((v) => v.status === 'new' || v.status === 'error' || (v.status === 'done' && !v.cover)
+    || (v.code && isPartial(v) && Date.now() - (v.partialTriedAt || 0) > PARTIAL_RETRY_MS));
 }
 
 async function runOrganize({ mode = 'new', ids = null } = {}) {
@@ -564,15 +626,15 @@ async function organizeBody(mode, ids) {
   await Promise.all(Array.from({ length: Math.min(ORGANIZE_WORKERS, list.length) }, worker));
   // 전에 번역을 못 한 제목이 있으면 이어서 번역 (사이트에는 다시 묻지 않음)
   if (!job.cancelled && store.settings.translateTitles !== false && !ctx.skipTranslate) {
-    const rest = Object.values(store.videos).filter((x) => !x.missing && !x.locked && x.titleJa && !x.titleKo).slice(0, 500);
+    const rest = Object.values(store.videos).filter(needsTranslate).slice(0, 500);
     let n = 0;
     for (const x of rest) {
       if (job.cancelled || ctx.skipTranslate) break;
       send('organize:progress', { current: `제목 번역 ${n + 1}/${rest.length}` });
       await translateVideo(x, log, ctx);
-      if (x.titleKo) { n++; send('video:changed', x); store.save(); }
+      n++; send('video:changed', x); store.save();
     }
-    if (n) log(`제목 번역: ${n}개`);
+    if (n) log(`제목·장르 번역: ${n}개`);
   }
   store.save(true);
   const summary = { done, total, cancelled: job.cancelled };
@@ -666,7 +728,7 @@ function registerIpc() {
     if (job.running) return { ok: false, message: '이미 정리 중이에요' };
     let n = 0;
     for (const v of Object.values(store.videos)) {
-      if (!v.locked && v.titleJa && v.titleBy === 'google') { v.titleKo = ''; n++; }
+      if (!v.locked && (v.titleJa || v.titleEn) && v.titleBy === 'google') { v.titleKo = ''; n++; }
     }
     if (!n) return { ok: true, count: 0 };
     runOrganize({ mode: 'translate' });
@@ -706,6 +768,32 @@ function registerIpc() {
     return v ? readKeyframes(v.path) : null;
   });
 
+  // 영상 옆 자막 파일 목록 / 읽기 (그 영상의 자막으로 찾은 파일만 읽어 준다)
+  ipcMain.handle('video:subtitles', (_e, id) => {
+    const v = store.videos[id];
+    if (!v) return [];
+    const list = findSubtitles(v.path);
+    const has = list.length > 0;
+    if (v.hasSub !== has) { v.hasSub = has; store.save(); }
+    return list.map(({ file, label, name }) => ({ file, label, name }));
+  });
+  ipcMain.handle('subtitle:load', (_e, id, file) => {
+    const v = store.videos[id];
+    if (!v || !findSubtitles(v.path).some((x) => x.file === file)) return null;
+    try { return loadSubtitle(file); } catch (e) { return { error: e.message }; }
+  });
+
+  // 재생 횟수 직접 고치기 (+1 / -1)
+  ipcMain.handle('video:playCount', (_e, id, delta) => {
+    const v = store.videos[id];
+    if (!v) return null;
+    const d = Math.trunc(Number(delta) || 0);
+    v.playCount = Math.max(0, (v.playCount || 0) + d);
+    if (d > 0) { v.lastPlayed = Date.now(); v.watchPending = 0; }
+    store.save();
+    return v;
+  });
+
   // 아직 재생 횟수로 세지 않은 시청 시간 (전에 보다 만 시간, 초)
   ipcMain.handle('video:watchPending', (_e, id) => (store.videos[id] && store.videos[id].watchPending) || 0);
 
@@ -724,7 +812,33 @@ function registerIpc() {
     const v = store.videos[id];
     if (!v) return null;
     v.lastPosition = Math.max(0, Math.floor(position || 0));
-    // 아직 재생 횟수로 세지 않은 시청 시간 (다음에 열면 여기서부터 이어서 더한다)
+    // 영상 옆 자막 파일 목록 / 읽기 (그 영상의 자막으로 찾은 파일만 읽어 준다)
+  ipcMain.handle('video:subtitles', (_e, id) => {
+    const v = store.videos[id];
+    if (!v) return [];
+    const list = findSubtitles(v.path);
+    const has = list.length > 0;
+    if (v.hasSub !== has) { v.hasSub = has; store.save(); }
+    return list.map(({ file, label, name }) => ({ file, label, name }));
+  });
+  ipcMain.handle('subtitle:load', (_e, id, file) => {
+    const v = store.videos[id];
+    if (!v || !findSubtitles(v.path).some((x) => x.file === file)) return null;
+    try { return loadSubtitle(file); } catch (e) { return { error: e.message }; }
+  });
+
+  // 재생 횟수 직접 고치기 (+1 / -1)
+  ipcMain.handle('video:playCount', (_e, id, delta) => {
+    const v = store.videos[id];
+    if (!v) return null;
+    const d = Math.trunc(Number(delta) || 0);
+    v.playCount = Math.max(0, (v.playCount || 0) + d);
+    if (d > 0) { v.lastPlayed = Date.now(); v.watchPending = 0; }
+    store.save();
+    return v;
+  });
+
+  // 아직 재생 횟수로 세지 않은 시청 시간 (다음에 열면 여기서부터 이어서 더한다)
     if (watched != null && isFinite(watched)) v.watchPending = Math.max(0, Math.round(watched));
     if (duration && isFinite(duration)) v.duration = Math.round(duration);
     store.save();
@@ -940,6 +1054,19 @@ function registerIpc() {
 
 
   ipcMain.handle('app:openDataDir', () => shell.openPath(dataDir()));
+  // 표지 폴더 열기: 프로그램 폴더 저장이면 covers 폴더, 영상 옆·covers 폴더 저장이면 가장 최근에 받은 표지가 있는 폴더
+  ipcMain.handle('covers:openDir', async () => {
+    if (store.settings.coverMode === 'appdata') {
+      fs.mkdirSync(appCoversDir(), { recursive: true });
+      return shell.openPath(appCoversDir());
+    }
+    const latest = Object.values(store.videos)
+      .filter((v) => v.cover && !v.cover.startsWith(appCoversDir()) && fs.existsSync(v.cover))
+      .sort((a, b) => (b.fetchedAt || 0) - (a.fetchedAt || 0))[0];
+    if (latest) { shell.showItemInFolder(latest.cover); return ''; }
+    const folder = (store.data.folders || []).find((f) => fs.existsSync(f.path));
+    return folder ? shell.openPath(folder.path) : shell.openPath(appCoversDir());
+  });
   ipcMain.handle('app:openPath', (_e, p) => (p && p.startsWith(dataDir()) ? shell.openPath(p) : null));
 }
 

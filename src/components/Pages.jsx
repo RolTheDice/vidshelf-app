@@ -94,7 +94,7 @@ export function SettingsPage({ lib, onLib, onSettings, onRelocate, onRetranslate
   const [showRules, setShowRules] = useState(false);
   const [deeplKey, setDeeplKey] = useState(s.deeplKey || '');
   const [deeplMsg, setDeeplMsg] = useState('');
-  const googleTitles = lib.videos.filter((v) => v.titleJa && v.titleBy === 'google' && !v.locked).length;
+  const googleTitles = lib.videos.filter((v) => (v.titleJa || v.titleEn) && v.titleBy === 'google' && !v.locked).length;
   const saveDeepl = async () => {
     const key = deeplKey.trim();
     if (!key) { onSettings({ deeplKey: '' }); setDeeplMsg('키를 지웠어요. 구글 번역을 써요.'); return; }
@@ -125,6 +125,10 @@ export function SettingsPage({ lib, onLib, onSettings, onRelocate, onRetranslate
         <div className="inline" style={{ marginTop: 10 }}>
           <button className="btn sm" disabled={moving || !covers} onClick={() => { setMoving(true); Promise.resolve(onRelocate()).finally(() => setMoving(false)); }}>
             <Icon name="folder" size={14} />{moving ? '옮기는 중…' : `이미 받은 표지를 이 위치로 옮기기 (${covers}개)`}
+          </button>
+          <button className="btn sm" onClick={() => window.vs.openCoversDir()}
+            title={s.coverMode === 'appdata' ? '%APPDATA%\\VidShelf\\covers 폴더를 열어요' : '가장 최근에 받은 표지가 있는 폴더를 열어요'}>
+            <Icon name="external" size={14} />표지 폴더 열기
           </button>
           <span style={{ color: 'var(--muted)', fontSize: 12 }}>이 프로그램이 받은 <code>품번.jpg</code>만 옮겨요. 직접 넣어 둔 다른 이름의 이미지는 그대로 둬요.</span>
         </div>
@@ -184,7 +188,7 @@ export function SettingsPage({ lib, onLib, onSettings, onRelocate, onRetranslate
         <div className="inline" style={{ marginBottom: 6 }}>
           <label><input type="checkbox" checked={s.translateTitles !== false} onChange={(e) => onSettings({ translateTitles: e.target.checked })} /> 제목을 한국어로 번역</label>
         </div>
-        <div className="desc" style={{ marginTop: 0 }}>일본어 원제를 번역해서 제목으로 저장하고, 원제는 아래에 작게 남겨요. 시리즈 이름도 번역해요. 기계 번역이라 어색할 수 있고, 예전(avdbs) 한국어 제목은 그대로 둬요. 번역이 안 되면 영어 제목으로 두고 다음 정리 때 다시 시도해요.</div>
+        <div className="desc" style={{ marginTop: 0 }}>일본어 원제를 번역해서 제목으로 저장하고, 원제는 아래에 작게 남겨요. 시리즈 이름도 번역해요. 기계 번역이라 어색할 수 있고, 이미 한국어로 된 제목은 그대로 둬요. 번역이 안 되면 영어 제목으로 두고 다음 정리 때 다시 시도해요.</div>
         <div className="desc" style={{ marginTop: 0 }}>DeepL API 키를 넣으면 DeepL로 번역해요 (무료 키는 한 달 50만 자). 키가 없거나 DeepL이 안 되면 구글 번역을 써요. 키는 이 PC의 프로그램 폴더에만 저장돼요.</div>
         <div className="inline" style={{ marginBottom: 6 }}>
           <input type="password" placeholder="DeepL API 키 (예: xxxxxxxx-xxxx-…:fx)" value={deeplKey} style={{ flex: 1, minWidth: 260 }}
