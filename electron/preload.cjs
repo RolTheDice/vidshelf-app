@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('vs', {
   updateActor: (name, patch) => ipcRenderer.invoke('actor:update', name, patch),
   chooseActorPhoto: (name) => ipcRenderer.invoke('actor:choosePhoto', name),
   removeActor: (name, opts) => ipcRenderer.invoke('actor:remove', name, opts),
+  renameActor: (oldName, newName) => ipcRenderer.invoke('actor:rename', oldName, newName),
   fetchActorPhotos: () => ipcRenderer.invoke('actors:fetchPhotos'),
   onActorsProgress: on('actors:progress'),
   unblockActor: (name) => ipcRenderer.invoke('actor:unblock', name),

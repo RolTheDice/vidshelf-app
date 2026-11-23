@@ -1,9 +1,18 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Icon from './Icon.jsx';
 import { imgUrl } from '../lib.js';
 
-export function ActorsPage({ videos, actors, onOpen, onActorChange, onRemove, photoProgress, onFetchPhotos }) {
+export function ActorsPage({ videos, actors, onOpen, onActorChange, onRemove, onRename, photoProgress, onFetchPhotos }) {
   const [q, setQ] = useState('');
+  const [menu, setMenu] = useState(null); // 오른쪽 클릭 메뉴 {x, y, a}
+  useEffect(() => {
+    if (!menu) return undefined;
+    const close = () => setMenu(null);
+    window.addEventListener('mousedown', close);
+    window.addEventListener('blur', close);
+    window.addEventListener('keydown', close);
+    return () => { window.removeEventListener('mousedown', close); window.removeEventListener('blur', close); window.removeEventListener('keydown', close); };
+  }, [menu]);
   const [sort, setSort] = useState('count');
   const list = useMemo(() => {
     const counts = {};
@@ -45,10 +54,23 @@ export function ActorsPage({ videos, actors, onOpen, onActorChange, onRemove, ph
           )}
         </div>
       )}
+      {menu && (
+        <div className="ctx-menu" style={{ left: Math.min(menu.x, window.innerWidth - 200), top: Math.min(menu.y, window.innerHeight - 190) }}
+          onMouseDown={(e) => e.stopPropagation()}>
+          <div className="ctx-title">{menu.a.name}</div>
+          <button onClick={() => { setMenu(null); onRename(menu.a.name); }}><Icon name="edit" size={14} />이름 바꾸기 / 합치기</button>
+          <button onClick={() => { setMenu(null); onOpen(menu.a.name); }}><Icon name="grid" size={14} />작품 보기 ({menu.a.count}편)</button>
+          <button onClick={() => { setMenu(null); window.vs.updateActor(menu.a.name, { favorite: !menu.a.favorite }).then(onActorChange); }}>
+            <Icon name="heart" size={14} fill={menu.a.favorite} />{menu.a.favorite ? '즐겨찾기 빼기' : '즐겨찾기'}</button>
+          <button onClick={() => { setMenu(null); window.vs.chooseActorPhoto(menu.a.name).then(onActorChange); }}><Icon name="image" size={14} />사진 바꾸기</button>
+          <button className="danger" onClick={() => { setMenu(null); onRemove(menu.a.name, menu.a.count); }}><Icon name="x" size={14} />배우 이름 지우기</button>
+        </div>
+      )}
       {list.length === 0 && <div className="empty" style={{ height: 300 }}>아직 배우 정보가 없어요. "정리하기"로 정보를 가져와 보세요.</div>}
       <div className="actor-grid">
         {list.map((a) => (
-          <div key={a.name} className="acard" onClick={() => onOpen(a.name)}>
+          <div key={a.name} className="acard" onClick={() => onOpen(a.name)}
+            onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, a }); }}>
             <div className="ph">
               {a.photo ? <img src={imgUrl(a.photo)} alt={a.name} /> : <Icon name="user" size={40} />}
             </div>

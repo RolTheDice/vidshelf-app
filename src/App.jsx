@@ -171,6 +171,21 @@ export default function App() {
   };
   const go = (gid, key) => { setPage('library'); setGrouping(gid); setGroupKey(key); setGroupQ(''); };
 
+  // 배우 이름 바꾸기 (이미 있는 이름이면 두 배우를 하나로 합침)
+  const renameActor = (name) => setPrompt({
+    title: `배우 이름 바꾸기 — ${name}`, initial: name, okLabel: '바꾸기',
+    onOk: (to) => {
+      if (to !== name && lib.actors[to] && !window.confirm(`"${to}" 배우가 이미 있어요. 두 배우를 하나로 합칠까요?\n(작품·사진·즐겨찾기가 "${to}"로 모여요)`)) return;
+      window.vs.renameActor(name, to).then((r) => {
+        setPrompt(null);
+        if (!r.ok) return;
+        setLib(r.library);
+        if (grouping === 'actor' && groupKey === name) setGroupKey(to);
+        flash(r.merged ? `"${to}"에 합쳤어요` : `"${to}"(으)로 바꿨어요`);
+      });
+    },
+  });
+
   const setSettings = (patch) => window.vs.updateSettings(patch).then((settings) => setLib((l) => ({ ...l, settings })));
 
   // ---------------------------------------------------------- 재생
@@ -455,7 +470,9 @@ export default function App() {
                 {hideBtn}
               </div>
               {visibleGroups.map((g) => (
-                <div key={g.name} className={`gitem ${groupKey === g.name ? 'on' : ''} ${g.special ? 'special' : ''}`} onClick={() => setGroupKey(g.name)}>
+                <div key={g.name} className={`gitem ${groupKey === g.name ? 'on' : ''} ${g.special ? 'special' : ''}`} onClick={() => setGroupKey(g.name)}
+                  onContextMenu={grouping === 'actor' && !g.special ? (e) => { e.preventDefault(); renameActor(g.name); } : undefined}
+                  title={grouping === 'actor' && !g.special ? '오른쪽 클릭: 이름 바꾸기' : undefined}>
                   {grouping === 'actor' && (lib.actors[g.name]?.photo
                     ? <img className="avatar" src={imgUrl(lib.actors[g.name].photo)} alt="" />
                     : <span className="avatar">{g.special ? '?' : g.name.slice(0, 1)}</span>)}
@@ -496,6 +513,7 @@ export default function App() {
       {page === 'actors' && (
         <ActorsPage videos={videos} actors={lib.actors} onOpen={(name) => go('actor', name)}
           onRemove={(name, count) => setRmActor({ name, count })}
+          onRename={renameActor}
           photoProgress={photoProgress}
           onFetchPhotos={() => {
             setPhotoProgress({ running: true, done: 0, total: 0 });

@@ -10,7 +10,7 @@ const { findSubtitles, loadSubtitle } = require('./subtitles.cjs');
 const { extractCode } = require('./code.cjs');
 const { R18Client } = require('./r18.cjs');
 const { PoomkiClient } = require('./poomki.cjs');
-const { nameSimilarity, nameToHangul } = require('./kana.cjs');
+const { nameSimilarity, nameToHangul, normRomaji } = require('./kana.cjs');
 const { translateJaKo, translateDeepl, deeplUsage } = require('./translate.cjs');
 const { findCover, coverPathFor, findExistingCover, saveCover, imageSize } = require('./cover.cjs');
 const { rememberRule, describeRule, parseCode, learnRule } = require('./coverfinder.cjs');
@@ -206,11 +206,21 @@ function koreanMakerLabel(code, d) {
  *  1) 전에 정해 둔 이름(일본어 이름 기준) → 2) 라이브러리에 같은 이름의 배우 → 3) 품번기의 한국어 이름과 맞춰 보기
  *  → 4) 그래도 없으면 읽는 법(가나)을 한글로 바꾼 이름
  */
+// 영어(로마자) 이름 비교용: 순서·장음 표기 차이 무시 (Aika Yamagishi = Yamagishi Aika = Aika Yamagisi)
+const romajiKey = (r) => String(r || '').toLowerCase().split(/[^a-z]+/).filter(Boolean).map(normRomaji).sort().join(' ');
+
 async function resolveActorNames(code, info, ctx, log, prevNames = []) {
   const maps = nameMaps();
-  const byJa = {};
-  for (const a of Object.values(store.actors)) if (a.ja) byJa[a.ja] = a.name;
   const compact = (n) => String(n || '').replace(/\s+/g, '');
+  // 이미 있는 배우 찾기: 일본어(한자) 이름 → 영어 이름 → 한국어 이름(바꾸기 전 이름 포함)
+  const byJa = {};
+  const byRomaji = {};
+  const byName = {};
+  for (const a of Object.values(store.actors)) {
+    if (a.ja) byJa[a.ja] = a.name;
+    if (a.romaji) byRomaji[romajiKey(a.romaji)] = a;
+    for (const n of [a.name, ...(a.aliases || [])]) if (n) byName[compact(n)] = a.name;
+  }
   const pending = [];
   // 예전(avdbs)에 받아 둔 영상을 새로 받을 때: 그때의 한국어 배우 이름을 그대로 쓰고 기억한다
   // (배우 사진·별점·즐겨찾기가 그 이름에 붙어 있으므로 이름이 바뀌지 않게)
@@ -232,7 +242,11 @@ async function resolveActorNames(code, info, ctx, log, prevNames = []) {
       a.name = matchedPrev.get(a);
       continue;
     }
-    const known = (a.ja && (maps.actors[a.ja] || byJa[a.ja])) || Object.keys(store.actors).find((n) => compact(n) === compact(a.name));
+    const rom = a.romaji && byRomaji[romajiKey(a.romaji)];
+    const known = (a.ja && (maps.actors[a.ja] || byJa[a.ja]))
+      // 영어 이름이 같아도 일본어 이름이 서로 다르게 알려져 있으면 다른 사람으로 본다
+      || (rom && (!rom.ja || !a.ja || rom.ja === a.ja) ? rom.name : null)
+      || byName[compact(a.name)];
     if (known) a.name = known;
     else pending.push(a);
   }
@@ -943,6 +957,35 @@ function registerIpc() {
     for (const k of ['memo', 'rating', 'favorite']) if (k in patch) a[k] = patch[k];
     store.save();
     return a;
+  });
+
+  // 배우 이름 바꾸기. 바꾼 이름의 배우가 이미 있으면 둘을 하나로 합친다.
+  // 예전 이름은 다른 이름(aliases)으로 남기고, 일본어·영어 이름 대응도 새 이름으로 옮겨서 앞으로 받는 작품도 새 이름으로
+  ipcMain.handle('actor:rename', (_e, oldName, newName) => {
+    const to = String(newName || '').replace(/\s+/g, ' ').trim();
+    if (!to || to === oldName) return { ok: false, library: snapshot() };
+    for (const v of Object.values(store.videos)) {
+      if (v.actors && v.actors.includes(oldName)) v.actors = [...new Set(v.actors.map((n) => (n === oldName ? to : n)))];
+    }
+    const from = store.actors[oldName] || { name: oldName };
+    const target = store.actors[to];
+    const merged = !!target;
+    const a = target || { ...from, name: to };
+    if (target) {
+      for (const k of ['ja', 'kana', 'romaji', 'r18Id', 'photoUrl', 'photoUrl2', 'idx', 'poomkiIdx']) if (!a[k] && from[k]) a[k] = from[k];
+      if ((!a.photo || !fs.existsSync(a.photo)) && from.photo) a.photo = from.photo;
+      a.favorite = !!(a.favorite || from.favorite);
+      a.rating = Math.max(a.rating || 0, from.rating || 0);
+      if (from.memo && !String(a.memo || '').includes(from.memo)) a.memo = [a.memo, from.memo].filter(Boolean).join('\n');
+    }
+    a.aliases = [...new Set([...(a.aliases || []), ...(from.aliases || []), oldName])].filter((x) => x && x !== to);
+    delete store.actors[oldName];
+    store.actors[to] = a;
+    const maps = nameMaps();
+    for (const [ja, ko] of Object.entries(maps.actors)) if (ko === oldName) maps.actors[ja] = to;
+    if (from.ja) maps.actors[from.ja] = to;
+    store.save(true);
+    return { ok: true, merged, library: snapshot() };
   });
 
   // 배우 이름 지우기: 모든 영상의 출연 정보에서 이름을 빼고 배우 목록에서도 지운다 (영상 파일은 그대로)
