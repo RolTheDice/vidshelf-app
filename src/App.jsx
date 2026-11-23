@@ -121,9 +121,20 @@ export default function App() {
     [videos, lib?.settings.recentDays],
   );
 
+  // 분류(위쪽 칩)나 왼쪽 목록에서 고른 항목이 바뀌면: 새 목록의 맨 위 영상을 선택하고 목록도 맨 위로
+  const resetToTop = useRef(false);
+  useEffect(() => { resetToTop.current = true; }, [grouping, groupKey]);
+
   // 목록이 바뀌었는데 선택한 영상이 없으면 첫 번째를 선택
   // 목록이 비면 선택도 비운다 (다른 분류에서 고른 영상이 계속 보이지 않게)
   useEffect(() => {
+    if (resetToTop.current && shown.length) {
+      resetToTop.current = false;
+      if (primaryId !== shown[0].id || selectedIds.size !== 1) {
+        setPrimaryId(shown[0].id); setAnchorId(shown[0].id); setSelectedIds(new Set([shown[0].id]));
+      }
+      return;
+    }
     if (shown.length && !shown.some((v) => v.id === primaryId)) {
       setPrimaryId(shown[0].id); setAnchorId(shown[0].id); setSelectedIds(new Set([shown[0].id]));
     } else if (!shown.length && (primaryId || selectedIds.size)) {
